@@ -1,139 +1,329 @@
-1. Execute o comando `cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/04-State/` para entrar na pasta do exercicío.'
-2. Vamos utilizar o bucket criado na configuração inicial para guardar o estado remoto. Caso não se lembre o nome utilize o comando `aws s3 ls` para poder copiar o nome.
+# 01.4 - State remoto: o time da Vortex colaborando sem corromper o estado
 
-    ![](images/s3nome.png)
+> **Sexta-feira, 9h. Mês 1 na Vortex Mobility.**
+> A equipe de plataforma cresceu: agora são três pessoas mexendo na mesma infra. Na quinta passou perto do desastre — dois `apply` ao mesmo tempo quase recriaram a mesma VPC. Helena te chama:
+>
+> > *— "O estado do Terraform está no laptop de cada um. Isso não escala e é perigoso: se o seu Codespaces some, o estado some junto, e o time não enxerga o que você criou. Quero o estado **num lugar único e compartilhado**, com versionamento."*
+>
+> Diego confirma: *— "Estado remoto no S3. É o primeiro passo de qualquer time sério de Terraform. O bucket vira a fonte da verdade."*
 
-3. Entre na pasta 'test' com o comando `cd test`
-4.  Utilize o comando `code state.tf` para abrir o arquivo responsavel por configurar o estado remoto e adicione o nome do seu bucket S3 na linha 3.
-   
-   ![](images/state.png)
+Os comandos `bash` rodam **no terminal do Codespaces**. A verificação é feita **no console da AWS** (S3).
+
+> [!WARNING]
+> **Pré-requisitos obrigatórios antes de começar:**
+>
+> - [ ] [Lab 01.3 — Count](../03-Count/README.md) concluído (você domina o ciclo e já destruiu a frota)
+> - [ ] Credenciais AWS do Academy atualizadas no Codespaces
+> - [ ] Um bucket S3 criado no setup da disciplina (nome no formato `lab-fiap-<SUA-TURMA>-<SEU-RM>`)
+>
+> **Descubra o nome do seu bucket:**
+>
+> ```bash
+> aws s3 ls
+> ```
+>
+> **O que você vai fazer:** configurar o backend S3, ver o estado nascer no bucket, apagar a cópia local e provar que o `init` recupera o estado do S3. **Tempo estimado: ~20 min.**
+
+## Principais pontos de aprendizagem
+
+- o que é o arquivo de estado e por que ele é crítico
+- configurar um backend remoto S3 (`terraform { backend "s3" {} }`)
+- entender por que estado remoto habilita trabalho em equipe
+- recuperar o estado do S3 após perder a cópia local
+
+## O que você terá ao final
+
+O estado da infra da Vortex centralizado num bucket S3 versionado — **a fonte única da verdade** que Helena pediu para o time inteiro trabalhar sem se atropelar.
+
+> [!TIP]
+> Sempre que encontrar um bloco **💡 Clique para entender**, abra-o.
+
+## Mapa do lab
+
+| Parte | O que você faz | Passos | Tempo |
+|-------|----------------|--------|-------|
+| [Parte 1](#parte-1---configurando-o-backend-s3) | Configurando o backend S3 | [1](#passo-1) · [2](#passo-2) · [3](#passo-3) · [4](#passo-4) · [5](#passo-5) · [6](#passo-6) · [7](#passo-7) | ~12 min |
+| [Parte 2](#parte-2---provando-que-o-estado-vive-no-s3) | Provando que o estado vive no S3 | [8](#passo-8) · [9](#passo-9) · [10](#passo-10) · [11](#passo-11) | ~8 min |
+
+> [!TIP]
+> Se travou em algum passo, clique no número dele na coluna **Passos**.
+
+## Contexto
+
+Por padrão, o Terraform guarda o estado num arquivo `terraform.tfstate` **local**. Isso funciona para uma pessoa, mas quebra em time: cada um teria sua cópia, e dois `apply` simultâneos corrompem tudo. O **backend remoto** move esse arquivo para um lugar central (aqui, um bucket S3). Com versionamento ativado no bucket, cada mudança gera uma versão — auditável e reversível.
+
+```mermaid
+flowchart LR
+    subgraph antes["Antes: estado local"]
+      A1["você<br/>tfstate no laptop"]
+      A2["colega<br/>outro tfstate"]
+      A1 -. "conflito!" .- A2
+    end
+    subgraph depois["Depois: estado remoto S3"]
+      S[("bucket S3<br/>estado único + versionado")]
+      D1["você"] --> S
+      D2["colega"] --> S
+    end
+```
+
+---
+
+## Parte 1 - Configurando o backend S3
+
+### Resultado esperado desta parte
+
+O Terraform passa a guardar o estado num objeto chamado `teste` dentro do seu bucket S3.
+
+---
+
+<a id="passo-1"></a>
+
+**1.** Entre na pasta da demo:
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/04-State
+```
+
+---
+
+<a id="passo-2"></a>
+
+**2.** Descubra o nome do bucket criado no setup (vamos usá-lo como estado remoto):
+
+```bash
+aws s3 ls
+```
+
+![](images/s3nome.png)
+
+---
+
+<a id="passo-3"></a>
+
+**3.** Entre na pasta `test`:
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/04-State/test
+```
+
+---
+
+<a id="passo-4"></a>
+
+**4.** Abra o `state.tf` e troque o valor de `bucket` pelo nome do seu bucket:
+
+```bash
+code state.tf
+```
+
+![](images/state.png)
 
 <details>
-<summary> 
-<b>Explicação Código Terraform</b>
-
-</summary>
-
+<summary><b>💡 Clique para entender: o bloco backend "s3"</b></summary>
 <blockquote>
 
-O arquivo Terraform descreve a configuração do backend para armazenar o estado do Terraform em um bucket do Amazon S3. Vou explicar linha por linha:
+O arquivo `state.tf` configura onde o estado é guardado:
 
 ```hcl
 terraform {
   backend "s3" {
-    bucket = "lab-fiap-SUA TURMA-SEU RM"
+    bucket = "lab-fiap-SUA-TURMA-SEU-RM"
     key    = "teste"
     region = "us-east-1"
   }
 }
 ```
 
-### Explicação:
+- `backend "s3"` diz para guardar o estado num bucket S3, em vez de localmente.
+- `bucket` é o nome do seu bucket (substitua pelo valor que apareceu em `aws s3 ls`).
+- `key` é o caminho/nome do objeto dentro do bucket onde o estado fica (`teste`).
+- `region` é a região do bucket.
 
-1. **`terraform {`**  
-   Inicia o bloco de configuração principal do Terraform. Esse bloco é usado para definir configurações globais para o Terraform.
+Com versionamento ativado no bucket, cada `apply` gera uma nova versão do objeto — você pode reverter para um estado anterior se algo der errado.
 
-2. **`backend "s3" {`**  
-   Configura o backend do Terraform para usar o S3 como o local de armazenamento do arquivo de estado. O backend armazena informações sobre os recursos provisionados e é essencial para a execução do Terraform, especialmente em equipes.
+> O nome do bucket **não pode ter espaços**. Use exatamente o nome que apareceu no `aws s3 ls`.
 
-3. **`bucket = "lab-fiap-SUA TURMA-SEU RM"`**  
-   Define o nome do bucket S3 onde o arquivo de estado será armazenado. Você precisará substituir "SUA TURMA-SEU RM" pelo nome real do bucket.
-
-4. **`key = "teste"`**  
-   Define o caminho do arquivo dentro do bucket S3. O arquivo de estado será salvo com o nome especificado (neste caso, "teste"). Esse caminho pode ser estruturado para melhor organização.
-
-5. **`region = "us-east-1"`**  
-   Especifica a região da AWS onde o bucket S3 está localizado. Neste caso, é "us-east-1" (Costa Leste dos EUA).
-
-6. **`}`**  
-   Fecha o bloco do backend.
-
-7. **`}`**  
-   Fecha o bloco principal do Terraform.
-
-### Resumo:
-Este script configura o Terraform para usar o S3 como backend, garantindo que o estado seja armazenado de forma remota e compartilhada. Isso é particularmente útil para colaboração entre equipes e para segurança do estado do Terraform.
+Documentação oficial: [Backend S3](https://developer.hashicorp.com/terraform/language/settings/backends/s3)
 
 </blockquote>
 </details>
-
-5. Utilize o comando `terraform init` para sincronizar com o estado remoto
-6. Execute o comando `terraform apply -auto-approve`
-7. Se for agora no [bucket do S3](https://s3.console.aws.amazon.com/s3/buckets?region=us-east-1) que criou para o exercicio você poderá ver que foi criado um arquivo com o nome teste. Nele constam todas as indormações de tudo que o terraform executou dentro da pasta test. Verifique baixando o arquivo e lendo.
 
 <details>
-<summary> 
-<b>Explicação arquivos criados no S3</b>
-
-</summary>
-
+<summary><b>⚠ Se der erro: <code>Error: Failed to get existing workspaces / NoSuchBucket</code></b></summary>
 <blockquote>
 
-Com a configuração fornecida, ao executar o Terraform, o seguinte será criado no bucket S3 especificado para armazenar o estado do Terraform:
-
----
-
-### **Arquivos e Estrutura Criados no S3**
-
-#### 1. **Arquivo principal do estado (`teste`)**
-   - **Localização**: Dentro do bucket S3 especificado (`lab-fiap-SUA TURMA-SEU RM`), será criado um arquivo chamado `teste`.
-   - **Conteúdo**:
-     - Esse arquivo armazena o **estado do Terraform** (informações detalhadas sobre os recursos provisionados na infraestrutura, como IDs, configurações e dependências).
-     - Ele é usado pelo Terraform para rastrear o que já foi criado, atualizado ou deletado.
-
-#### 2. **Versões do estado (`teste` com controle de versões, se habilitado no bucket)**
-   - Se o bucket S3 estiver configurado com **versionamento**, cada vez que o estado for atualizado (durante comandos como `terraform apply` ou `terraform refresh`), uma nova versão do arquivo será criada.
-   - Isso permite:
-     - **Recuperação** de versões anteriores do estado, caso algo dê errado.
-     - **Auditoria** de mudanças no estado ao longo do tempo.
-
----
-
-### **Exemplo de Estrutura no Bucket**
-Se o bucket estiver configurado da maneira atual, você verá algo assim no S3:
-
-```
-lab-fiap-SUA TURMA-SEU RM/
-│
-└── teste
-    ├── (Versão mais recente do estado do Terraform)
-    ├── (Versões anteriores, se o versionamento do S3 estiver ativado)
-```
-
----
-
-### **Características dos Arquivos**
-
-- **Arquivo de Estado (`teste`)**:
-  - Contém detalhes sobre os recursos provisionados, como:
-    - IDs dos recursos (e.g., instâncias EC2, buckets S3).
-    - Configurações (e.g., tamanho de uma instância, tags associadas).
-    - Informações de dependência e relações entre recursos.
-  - Sensível: Deve ser protegido, pois pode conter credenciais ou dados confidenciais.
-
-- **Versionamento** *(se habilitado)*:
-  - Garante que você possa reverter para estados anteriores em caso de falhas ou alterações indesejadas.
-
----
-
-### **Recomendações de Boas Práticas**
-1. **Habilitar versionamento no S3**:
-   - Para proteger contra perda de dados ou corrupção do estado.
-
-2. **Habilitar criptografia no bucket**:
-   - Use criptografia SSE (Server-Side Encryption) para proteger o arquivo de estado.
-
-3. **Usar controle de acesso**:
-   - Configure políticas de acesso no bucket para garantir que apenas usuários autorizados possam visualizar ou modificar o estado.
-
+Causa: o nome do bucket no `state.tf` está errado ou tem espaços. Confirme com `aws s3 ls`, cole o nome exato e rode `terraform init -reconfigure`.
 
 </blockquote>
 </details>
 
-  ![images/states3.png](images/states3.png)
+---
 
-9. Execute o comando `rm -rf .terraform` para remover todos os arquivos de estado local do terraform
-10. Execute novamente `terraform init`, dessa vez além de baixar os plugins e providers também baixou o ultimo estado da sua infraestrutura.
-11. Execute o comando `terraform apply -auto-approve`. Note que nada foi alterado ou adiiconado já que sua maquina ainda esta disponivel e o terraform descobriu isso via estado remoto.
-    ![apply](images/apply0.png)
-12. Execute o comando `terraform destroy -auto-approve`
+<a id="passo-5"></a>
+
+**5.** Inicialize para sincronizar com o estado remoto:
+
+```bash
+terraform init
+```
+
+---
+
+<a id="passo-6"></a>
+
+**6.** Aplique para criar a instância de teste (o estado será gravado no S3):
+
+```bash
+terraform apply -auto-approve
+```
+
+---
+
+<a id="passo-7"></a>
+
+**7.** No [console do S3](https://s3.console.aws.amazon.com/s3/buckets?region=us-east-1), abra seu bucket e confirme que existe um objeto chamado `teste` — é o estado de tudo que o Terraform criou nesta pasta. Baixe e abra para ver o conteúdo.
+
+![images/states3.png](images/states3.png)
+
+<details>
+<summary><b>💡 Clique para entender: o que é gravado no S3</b></summary>
+<blockquote>
+
+O objeto `teste` no bucket contém o **estado do Terraform**: IDs dos recursos provisionados, suas configurações e as dependências entre eles. É como o Terraform sabe, no próximo `apply`, o que já existe e o que precisa mudar.
+
+Boas práticas para o bucket de estado:
+
+1. **Versionamento ativado** — para reverter a um estado anterior em caso de falha.
+2. **Criptografia (SSE)** — o estado pode conter dados sensíveis.
+3. **Controle de acesso** — só quem deve mexer na infra acessa o bucket.
+
+> O estado **não** deve ser editado à mão. Trate-o como um banco de dados gerenciado pelo Terraform.
+
+Documentação oficial: [State](https://developer.hashicorp.com/terraform/language/state)
+
+</blockquote>
+</details>
+
+### Checkpoint
+
+Se chegou até aqui:
+
+- o `state.tf` aponta para o seu bucket
+- o `apply` criou a instância de teste
+- existe um objeto `teste` no bucket com o estado
+
+---
+
+## Parte 2 - Provando que o estado vive no S3
+
+### Resultado esperado desta parte
+
+Você apaga a cópia local do `.terraform`, roda `init` de novo e prova que o estado é recuperado do S3 — a infra continua intacta.
+
+---
+
+<a id="passo-8"></a>
+
+**8.** Apague os arquivos locais do Terraform para simular um colega novo (ou seu Codespaces recriado):
+
+```bash
+rm -rf .terraform
+```
+
+---
+
+<a id="passo-9"></a>
+
+**9.** Rode `init` novamente. Além de baixar plugins, ele recupera o **último estado** do seu bucket S3:
+
+```bash
+terraform init
+```
+
+---
+
+<a id="passo-10"></a>
+
+**10.** Aplique de novo. Observe que **nada é criado ou alterado**: a instância já existe e o Terraform descobriu isso pelo estado remoto.
+
+```bash
+terraform apply -auto-approve
+```
+
+![apply](images/apply0.png)
+
+> [!NOTE]
+> Esse "nada a fazer" é a prova do conceito: mesmo sem nenhum arquivo local de estado, o Terraform sabe exatamente o que existe — porque a verdade está no S3, não no seu laptop.
+
+---
+
+<a id="passo-11"></a>
+
+**11.** Destrua a instância de teste:
+
+```bash
+terraform destroy -auto-approve
+```
+
+### Checkpoint
+
+Se chegou até aqui:
+
+- você apagou o estado local e o recuperou do S3
+- provou que o `apply` não recria o que já existe
+- destruiu a instância de teste
+
+---
+
+## Conclusão
+
+Você moveu o estado para um bucket S3 e provou que ele sobrevive à perda da cópia local. Esse é o alicerce do trabalho em equipe com Terraform: uma fonte única, versionada e compartilhada da verdade.
+
+**Mensagem para Helena:** o estado da Vortex agora vive no S3, não no laptop de ninguém. Qualquer pessoa do time faz `init` e enxerga a infra real. O risco dos `apply` simultâneos diminuiu. O próximo passo é separar **dev de prod** sem duplicar o código — usando workspaces sobre esse mesmo estado remoto.
+
+## Próximo passo
+
+Abra o próximo lab: **[Lab 01.5 — Workspaces](../05-Workspaces/README.md)**.
+
+Lá vamos isolar ambientes `dev` e `prod` com o mesmo código, cada um com seu próprio estado dentro do bucket S3.
+
+> [!CAUTION]
+> **Custo:** a instância de teste é uma EC2 `t3.micro` (~$0,01/h). Você já rodou `destroy` no passo 11 — confirme no painel EC2 que não sobrou nada `running`. O objeto de estado no S3 é desprezível em custo.
+
+---
+
+<details>
+<summary><b>💡 Glossário rápido — termos que aparecem neste lab</b></summary>
+<blockquote>
+
+| Termo | O que é |
+|-------|---------|
+| **State / Estado** | Arquivo onde o Terraform registra os recursos que gerencia (IDs, atributos, dependências). |
+| **Backend** | Onde o estado é armazenado. `local` por padrão; `s3` neste lab. |
+| **Backend S3** | Backend que guarda o estado num bucket S3, habilitando compartilhamento em equipe. |
+| **`key` (no backend)** | Caminho/nome do objeto de estado dentro do bucket. |
+| **Versionamento (S3)** | Recurso do bucket que mantém versões anteriores de cada objeto. |
+| **`terraform init -reconfigure`** | Reinicializa o backend quando a configuração dele mudou (ex.: nome do bucket). |
+
+</blockquote>
+</details>
+
+<details>
+<summary><b>💡 Como pedir ajuda se travou</b></summary>
+<blockquote>
+
+Antes de pedir ajuda, colete estas 4 informações:
+
+1. **Em que passo você está** (ex.: "passo 5, `init` do backend")
+2. **Mensagem de erro literal** (texto do terminal)
+3. **Saída de** `aws s3 ls` (mostra se o bucket existe e o nome exato)
+4. **O que você já tentou**
+
+Canais (em ordem de prioridade):
+
+- **Issues do repositório**: [github.com/vamperst/FIAP-Platform-Engineering/issues](https://github.com/vamperst/FIAP-Platform-Engineering/issues)
+- **E-mail do professor**: `Rafael@rfbarbosa.com`
+- **Antes de tudo**: ~80% dos erros aqui são nome de bucket incorreto no `state.tf`. Confira com `aws s3 ls` e rode `terraform init -reconfigure`.
+
+</blockquote>
+</details>

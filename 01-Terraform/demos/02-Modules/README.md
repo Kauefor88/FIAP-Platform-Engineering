@@ -1,312 +1,289 @@
-1. Execute o comando `cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/` para entrar na pasta do exercício.
+# 01.2 - Módulos: componentizando a rede da Vortex
 
-<details>
-<summary> 
-<b>Explicação Estrutura de pastas</b>
+> **Terça-feira, 14h. Mês 1 na Vortex Mobility.**
+> A prova de conceito da EC2 convenceu Helena. Agora vem o pulo: a rede.
+>
+> > *— "A Vortex vai abrir em 30 cidades. Cada ambiente precisa de uma VPC com subnets em todas as zonas de disponibilidade e rotas para a internet. Não quero copiar e colar esse bloco de rede 30 vezes — quero **um módulo** que eu chame quantas vezes precisar."*
+>
+> Diego complementa: *— "Módulo é como uma função: você escreve a rede uma vez, dá um `source`, e chama. Se mudar a regra de rede, muda num lugar só."*
 
-</summary>
+Os comandos `bash` deste lab rodam **no terminal do Codespaces**. As verificações são feitas **no console da AWS** (painel VPC).
 
-<blockquote>
+> [!WARNING]
+> **Pré-requisitos obrigatórios antes de começar:**
+>
+> - [ ] [Lab 01.1 — Plan e Apply](../01-Plan-Apply/README.md) concluído (você entende o ciclo `init`/`plan`/`apply`/`destroy`)
+> - [ ] Credenciais AWS do Academy atualizadas no Codespaces
+> - [ ] Terraform instalado (`terraform -version` → 1.x)
+> - [ ] Você consegue abrir o [painel VPC](https://us-east-1.console.aws.amazon.com/vpc/home?region=us-east-1#vpcs:)
+>
+> **Valide rapidamente:**
+>
+> ```bash
+> aws sts get-caller-identity
+> ```
+>
+> **O que você vai fazer:** subir uma VPC com subnets públicas em todas as AZs (via um módulo), depois subir as route tables (via outro módulo), e ver os dois módulos colaborando. **Tempo estimado: ~25 min.**
 
-No exercício, as pastas que possuem o sufixo **"-call"** são aquelas responsáveis por **chamar os módulos locais do Terraform**. Essas pastas atuam como pontos de entrada para a execução de configurações definidas em módulos reutilizáveis. 
+> [!IMPORTANT]
+> A rede que você criar aqui **não será destruída ao final** — a próxima demo (01.3 — Count) escala uma frota de servidores **dentro desta VPC**. Só destruiremos a rede ao final da demo Count.
 
-## O que é um módulo no Terraform?
+## Principais pontos de aprendizagem
 
-Um **módulo no Terraform** é um conjunto de arquivos de configuração agrupados que encapsulam recursos relacionados e fornecem uma forma de reutilização e organização. Ele permite que você componha infraestrutura complexa dividindo-a em partes menores, mais gerenciáveis e reutilizáveis. 
+- o que é um módulo e por que pastas com sufixo `-call` o invocam
+- referenciar um módulo local com `source`
+- criar recursos dinamicamente em todas as AZs com `count` + `data source`
+- separar a criação de recursos (módulo) da invocação (raiz)
 
-### Como funciona?
-- **Pastas com o sufixo "-call"**: São usadas para **invocar os módulos** e especificar os parâmetros necessários para sua configuração. Elas simplificam o processo de execução ao fornecer a interface de chamada para os módulos já definidos.
-- **Módulos locais**: Geralmente, são pastas contendo arquivos `.tf` que definem os recursos e lógica de infraestrutura. Essas definições são referenciadas nas pastas "-call" usando o bloco `module`.
+## O que você terá ao final
 
-### Exemplos de uso
-```hcl
-module "example" {
-  source = "../modules/example-module"
-  variable_1 = "value"
-  variable_2 = "value"
-}
+A base de rede da Vortex — uma VPC com subnets públicas e rotas para a internet — definida como **módulos reutilizáveis**, exatamente o que Helena pediu para não copiar e colar a cada nova cidade.
+
+> [!TIP]
+> Sempre que encontrar um bloco **💡 Clique para entender**, abra-o. Ele aprofunda sem atrapalhar quem só quer seguir o passo a passo.
+
+## Mapa do lab
+
+| Parte | O que você faz | Passos | Tempo |
+|-------|----------------|--------|-------|
+| [Parte 1](#parte-1---subindo-a-vpc-via-módulo) | Subindo a VPC via módulo | [1](#passo-1) · [2](#passo-2) · [3](#passo-3) · [4](#passo-4) · [5](#passo-5) | ~12 min |
+| [Parte 2](#parte-2---subindo-as-route-tables-via-módulo) | Subindo as route tables via módulo | [6](#passo-6) · [7](#passo-7) · [8](#passo-8) · [9](#passo-9) · [10](#passo-10) | ~13 min |
+
+> [!TIP]
+> Se travou em algum passo, clique no número dele na coluna **Passos**.
+
+## Contexto
+
+A estrutura de pastas conta a história: as pastas `VPC` e `RouteTables` **definem** módulos (os blocos reutilizáveis); as pastas `vpc-call` e `RT-call` **invocam** esses módulos. A raiz (onde você roda `terraform init`) é sempre a `-call` — ela carrega o provider e chama o módulo.
+
+```mermaid
+flowchart TD
+    subgraph call["Raízes (onde se roda terraform)"]
+      VC["vpc-call/<br/>provider + module \"vpc\""]
+      RC["RT-call/<br/>provider + module \"routetable\""]
+    end
+    subgraph mods["Módulos reutilizáveis"]
+      V["VPC/<br/>aws_vpc + aws_subnet + igw"]
+      R["RouteTables/<br/>route table + associações"]
+    end
+    VC -->|source = ../VPC| V
+    RC -->|source = ../RouteTables| R
+    R -.descobre por tag.-> V
 ```
 
-</blockquote>
-</details>
-
-2. Entre na pasta vpc-call com o comando `cd vpc-call`
-3. Execute o comando `terraform init`
-4. Execute o comando `terraform plan`
-5. Execute o comando `terraform apply -auto-approve`
-
 <details>
-<summary> 
-<b>Explicação Configuração VPC</b>
-
-</summary>
-
-<blockquote>
-# Como a Arquitetura Funciona
-
-A arquitetura definida pelos arquivos Terraform cria uma infraestrutura básica na AWS com conectividade à Internet. Abaixo está uma explicação detalhada de como ela funciona e como os componentes se integram.
-
----
-
-## 1. **Virtual Private Cloud (VPC)**
-
-### O que é?
-- A VPC é uma rede virtual isolada na AWS onde os recursos, como sub-redes e gateways, são criados.
-
-### Como funciona?
-- A configuração no arquivo `vpc.tf` cria uma VPC com:
-  - **Bloco CIDR:** Define o intervalo de endereços IP (`9.0.0.0/16`).
-  - **DNS e Hostnames:** Ativados para facilitar a resolução de nomes e a comunicação entre os recursos.
-
-### Objetivo:
-- Servir como base para todos os outros recursos, garantindo uma rede segura e personalizada.
-
----
-
-## 2. **Sub-redes Públicas**
-
-### O que são?
-- As sub-redes são divisões dentro da VPC que permitem organizar e isolar os recursos.
-
-### Como funciona?
-- No arquivo `vpc.tf`:
-  - É criada uma sub-rede pública para **cada zona de disponibilidade** na região configurada (`us-east-1`).
-  - Cada sub-rede é configurada para:
-    - **Atribuir IPs públicos automaticamente.**
-    - **Ser mapeada a partir do bloco CIDR principal da VPC.**
-
-### Objetivo:
-- Hospedar recursos que precisam de acesso público, como servidores web.
-
----
-
-## 3. **Internet Gateway (IGW)**
-
-### O que é?
-- Um componente que conecta a VPC à Internet, permitindo que os recursos públicos acessem e sejam acessados pela Internet.
-
-### Como funciona?
-- No arquivo `igw.tf`:
-  - O Internet Gateway é associado à VPC.
-  - Ele é essencial para permitir que as sub-redes públicas tenham conectividade externa.
-
-### Objetivo:
-- Prover conectividade externa para os recursos na VPC, como servidores ou containers.
-
----
-
-## 4. **Integração entre os Componentes**
-
-### Fluxo de Configuração:
-1. **VPC criada:** Serve como a rede principal onde tudo será configurado.
-2. **Sub-redes públicas configuradas:**
-   - Cada zona de disponibilidade recebe uma sub-rede.
-   - Estas sub-redes têm conectividade pública habilitada.
-3. **Internet Gateway associado:** Permite a comunicação da VPC com a Internet.
-4. **Recursos são implantados:** Os recursos podem ser instanciados nessas sub-redes públicas.
-
-### Fluxo de Dados:
-1. Um recurso (por exemplo, uma instância EC2) criado em uma sub-rede pública recebe um **endereço IP público**.
-2. A sub-rede direciona o tráfego externo pelo **Internet Gateway**.
-3. O gateway garante que os recursos da VPC possam se comunicar com a Internet.
-
----
-
-## 5. **Por que usar essa arquitetura?**
-
-- **Escalabilidade:** Adiciona sub-redes automaticamente para todas as zonas de disponibilidade.
-- **Conectividade:** Permite que recursos públicos, como servidores web, se comuniquem com usuários externos.
-- **Organização:** A estrutura modular permite reutilizar e adaptar o código para outros projetos.
-- **Automação:** A integração com o Terraform reduz erros manuais e facilita alterações futuras.
-
----
-
-# Resumo
-A arquitetura funciona como uma **rede personalizada** na AWS:
-1. **VPC** para isolar e organizar a infraestrutura.
-2. **Sub-redes públicas** para hospedar recursos acessíveis externamente.
-3. **Internet Gateway** para garantir a conectividade externa.
-
-Com esta configuração, é possível hospedar e gerenciar recursos de maneira segura, escalável e organizada.
-
-
-</blockquote>
-</details>
-
-<details>
-<summary> 
-<b>Explicação Código Terraform</b>
-
-</summary>
-
+<summary><b>💡 Clique para entender: o que é um módulo no Terraform</b></summary>
 <blockquote>
 
-# Explicação Detalhada dos Arquivos Terraform
+Um **módulo** é um conjunto de arquivos `.tf` agrupados que encapsulam recursos relacionados, permitindo reúso e organização. Pense numa função: você escreve a lógica uma vez e chama com argumentos diferentes.
 
-A configuração do Terraform utiliza diversos arquivos para organizar e gerenciar uma infraestrutura na AWS. A seguir, cada arquivo é explicado em ordem de execução lógica, começando pelo `main.tf`.
+- As pastas com sufixo **`-call`** são os **pontos de entrada**: invocam módulos e passam parâmetros. É nelas que mora o `provider` e onde se roda `terraform init`/`apply`.
+- As pastas de **módulo** (`VPC`, `RouteTables`) contêm a definição dos recursos e **não** declaram o provider — quem fornece o provider é a raiz que as chama.
 
----
+Exemplo de invocação:
 
-## 1. `main.tf`
-``` hcl
+```hcl
 module "vpc" {
   source = "../VPC"
 }
 ```
 
-### O que faz?
-- Este é o ponto de entrada do Terraform.
-- **Módulo:** Invoca o módulo `vpc`, localizado no diretório `../VPC`.
-  - Um módulo é um conjunto de configurações reutilizáveis.
-- **Objetivo:** Organizar a infraestrutura, delegando a criação da VPC e seus componentes ao módulo.
-
----
-
-## 2. `vars.tf`
-``` hcl
-data "aws_availability_zones" "available" {}
-
-variable "project" {
-  default = "fiap-lab"
-}
-variable "vpc_cidr" {
-  default = "9.0.0.0/16"
-}
-variable "subnet_escale" {
-  default = 6
-}
-
-variable "env" {
-  default = "prod"
-}
-
-variable "AWS_REGION" {
-  default = "us-east-1"
-}
-```
-
-### O que faz?
-- Define as **variáveis** usadas em outros arquivos:
-  - `project`: Nome do projeto, usado em tags e identificadores.
-  - `vpc_cidr`: Define o bloco de IPs da VPC (intervalo de endereços IP).
-  - `subnet_escale`: Controla o tamanho das sub-redes.
-  - `env`: Especifica o ambiente (`prod`, `dev`, etc.).
-  - `AWS_REGION`: Define a região da AWS (padrão: `us-east-1`).
-- O bloco `data "aws_availability_zones"` lista as zonas de disponibilidade para a região selecionada.
-
----
-
-## 3. `vpc.tf`
-``` hcl
-resource "aws_vpc" "vpc_created" {
-  cidr_block         = "${var.vpc_cidr}"
-  enable_dns_support = "true"
-  enable_dns_hostnames = "true"
-
-  tags = {
-    Name = "${var.project}"
-    env  = "${var.env}"
-  }
-}
-
-resource "aws_subnet" "public_igw" {
-  count                   = "${length(data.aws_availability_zones.available.names)}"
-  vpc_id                  = "${aws_vpc.vpc_created.id}"
-  cidr_block              = "${cidrsubnet("${var.vpc_cidr}", "${var.subnet_escale}", count.index+1)}"
-  map_public_ip_on_launch = "true"
-  availability_zone       = "${data.aws_availability_zones.available.names[count.index]}"
-
-  tags = {
-    Name = "${var.project}_public_igw_${data.aws_availability_zones.available.names[count.index]}"
-    Tier = "Public"
-    env  = "${var.env}"
-  }
-}
-```
-
-### O que faz?
-1. **Criação da VPC:**
-   - Configura uma Virtual Private Cloud (VPC) usando o bloco CIDR definido na variável `vpc_cidr`.
-   - Habilita suporte a DNS e hostnames.
-
-2. **Criação de Sub-redes Públicas:**
-   - Gera uma sub-rede pública para cada zona de disponibilidade.
-   - Cada sub-rede é configurada para:
-     - Atribuir IPs públicos automaticamente.
-     - Ser mapeada de forma dinâmica a partir do CIDR principal.
-
----
-
-## 4. `igw.tf`
-``` hcl
-resource "aws_internet_gateway" "igw" {
-  vpc_id = "${aws_vpc.vpc_created.id}"
-
-  tags = {
-    Name = "igw-${var.project}"
-    env  = "${var.env}"
-  }
-}
-```
-
-### O que faz?
-- Cria um Internet Gateway (IGW) que conecta a VPC à Internet.
-- **Associação:** Vincula o IGW à VPC criada no arquivo `vpc.tf`.
-
----
-
-# Fluxo de Funcionamento
-
-1. **Execução Inicial (`main.tf`):**
-   - O Terraform inicia no arquivo `main.tf`, invocando o módulo `vpc`.
-   - O módulo utiliza os demais arquivos (`vars.tf`, `vpc.tf`, `igw.tf`) para configurar os recursos.
-
-2. **Definição da VPC (`vpc.tf`):**
-   - Uma VPC é criada como a rede principal para todos os recursos.
-   - Sub-redes públicas são geradas automaticamente em cada zona de disponibilidade.
-
-3. **Conexão com a Internet (`igw.tf`):**
-   - O Internet Gateway conecta as sub-redes públicas à Internet, permitindo tráfego de entrada e saída.
-
-4. **Variáveis Compartilhadas (`vars.tf`):**
-   - Controla as configurações principais, como bloco CIDR, região da AWS e ambiente.
-
----
-
-# Benefícios dessa Organização
-
-- **Modularidade:** Cada parte da infraestrutura é gerenciada separadamente, facilitando a manutenção e reutilização.
-- **Escalabilidade:** Sub-redes são criadas dinamicamente para todas as zonas de disponibilidade.
-- **Conexão Pública:** Recursos na VPC podem acessar e ser acessados pela Internet.
-- **Automação:** Reduz erros manuais, permitindo a recriação rápida da infraestrutura.
-
-Para mais informações, consulte a [documentação oficial do Terraform](https://developer.hashicorp.com/terraform).
+Documentação oficial: [Módulos no Terraform](https://developer.hashicorp.com/terraform/language/modules)
 
 </blockquote>
 </details>
 
-6. Após o termino vá ao painel da aws e confira se a VPC, subnets e Rotas foram [criadas](https://us-east-1.console.aws.amazon.com/vpc/home?region=us-east-1#subnets:)
+---
 
-   ![vpc](images/vpccreated.png)
--------
-   ![sub](images/subnetscreated.png)
+## Parte 1 - Subindo a VPC via módulo
 
-7. Agora vamos subir as Route Tables. Para tal volte uma pasta com o comando `cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/` e entre em rt-call com o comando `cd RT-call/`
-8. Execute o comando `terraform init`
-9.  Execute o comando `terraform plan`
-10. Execute o comando `terraform apply -auto-approve`
+### Resultado esperado desta parte
+
+Uma VPC com uma subnet pública por zona de disponibilidade e um Internet Gateway, todos criados por um módulo invocado a partir de `vpc-call`.
+
+---
+
+<a id="passo-1"></a>
+
+**1.** Entre na pasta que invoca o módulo de VPC:
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/vpc-call
+```
+
+---
+
+<a id="passo-2"></a>
+
+**2.** Inicialize (note que o `init` também baixa o módulo local `../VPC`):
+
+```bash
+terraform init
+```
+
+---
+
+<a id="passo-3"></a>
+
+**3.** Gere o plano:
+
+```bash
+terraform plan
+```
+
+---
+
+<a id="passo-4"></a>
+
+**4.** Aplique:
+
+```bash
+terraform apply -auto-approve
+```
+
 <details>
-<summary> 
-<b>Explicação Código Terraform</b>
-
-</summary>
-
+<summary><b>💡 Clique para entender: o código do módulo VPC</b></summary>
 <blockquote>
 
-### Explicação Detalhada do Código
+**`vpc-call/main.tf`** (a raiz) apenas chama o módulo:
 
-#### **1. Arquivo `main.tf`**
-O arquivo `main.tf` faz a chamada do módulo que gerencia as tabelas de rotas:
+```hcl
+module "vpc" {
+  source = "../VPC"
+}
+```
+
+O provider fica em `vpc-call/provider.tf` e as versões em `vpc-call/versions.tf` — o módulo filho **não** repete isso.
+
+Dentro do módulo `VPC/`:
+
+**`vars.tf`** define variáveis e descobre as AZs da região:
+
+```hcl
+data "aws_availability_zones" "available" {}
+
+variable "project"       { default = "fiap-lab" }
+variable "vpc_cidr"      { default = "9.0.0.0/16" }
+variable "subnet_escale" { default = 6 }
+variable "env"           { default = "prod" }
+```
+
+**`vpc.tf`** cria a VPC e **uma subnet por AZ** usando `count`:
+
+```hcl
+resource "aws_vpc" "vpc_created" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = { Name = var.project, env = var.env }
+}
+
+resource "aws_subnet" "public_igw" {
+  count                   = length(data.aws_availability_zones.available.names)
+  vpc_id                  = aws_vpc.vpc_created.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, var.subnet_escale, count.index + 1)
+  map_public_ip_on_launch = true
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  tags = {
+    Name = "${var.project}_public_igw_${data.aws_availability_zones.available.names[count.index]}"
+    Tier = "Public"
+    env  = var.env
+  }
+}
+```
+
+- `count = length(...)` cria tantas subnets quantas AZs existirem na região
+- `cidrsubnet(...)` fatia o CIDR da VPC em blocos menores, um por subnet
+- a tag `Tier = "Public"` é o que a Parte 2 vai usar para **descobrir** essas subnets
+
+**`igw.tf`** conecta a VPC à internet:
+
+```hcl
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.vpc_created.id
+  tags   = { Name = "igw-${var.project}", env = var.env }
+}
+```
+
+Documentação oficial: [aws_vpc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc) · [count](https://developer.hashicorp.com/terraform/language/meta-arguments/count)
+
+</blockquote>
+</details>
+
+---
+
+<a id="passo-5"></a>
+
+**5.** No console, confirme que a VPC e as subnets foram criadas: [VPCs](https://us-east-1.console.aws.amazon.com/vpc/home?region=us-east-1#vpcs:) e [Subnets](https://us-east-1.console.aws.amazon.com/vpc/home?region=us-east-1#subnets:).
+
+![vpc](images/vpccreated.png)
+
+![sub](images/subnetscreated.png)
+
+### Checkpoint
+
+Se chegou até aqui:
+
+- a VPC `fiap-lab` existe
+- há uma subnet pública por AZ (tag `Tier=Public`)
+- o Internet Gateway está associado à VPC
+
+---
+
+## Parte 2 - Subindo as route tables via módulo
+
+### Resultado esperado desta parte
+
+Uma route table apontando para o Internet Gateway, associada a todas as subnets públicas — criada por um segundo módulo que **descobre** a VPC e o IGW criados na Parte 1.
+
+---
+
+<a id="passo-6"></a>
+
+**6.** Volte para a pasta de módulos e entre na que invoca as route tables:
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/RT-call
+```
+
+> [!NOTE]
+> A pasta se chama exatamente `RT-call` (com `RT` maiúsculo). O `cd` acima já usa o nome correto.
+
+---
+
+<a id="passo-7"></a>
+
+**7.** Inicialize:
+
+```bash
+terraform init
+```
+
+---
+
+<a id="passo-8"></a>
+
+**8.** Gere o plano:
+
+```bash
+terraform plan
+```
+
+---
+
+<a id="passo-9"></a>
+
+**9.** Aplique:
+
+```bash
+terraform apply -auto-approve
+```
+
+<details>
+<summary><b>💡 Clique para entender: o código do módulo RouteTables</b></summary>
+<blockquote>
+
+**`RT-call/main.tf`** chama o módulo:
 
 ```hcl
 module "routetable" {
@@ -314,137 +291,131 @@ module "routetable" {
 }
 ```
 
-**Explicação**:
-- **`module`**: Chama o módulo `routetable` que está localizado no diretório `../RouteTables`.
-- O módulo encapsula os recursos necessários para configurar a tabela de rotas.
+Dentro de `RouteTables/`:
 
-#### **2. Arquivo `routetable.tf`**
-Configura a tabela de rotas associada ao Internet Gateway:
+**`vars.tf`** **descobre** a VPC e o IGW que a Parte 1 criou, usando data sources por tag/filtro (não recria nada):
 
 ```hcl
-resource "aws_route_table" "to-igw" {
-  vpc_id = "${data.aws_vpc.vpc.id}"
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = "${data.aws_internet_gateway.igw.id}"
-  }
-
-  tags = {
-    Name = "to-igw-${var.project}"
-    env  = "${var.env}"
-  }
-}
-```
-
-**Explicação**:
-- **`aws_route_table`**: Cria uma tabela de rotas chamada `to-igw`.
-- **`route`**: Configura uma rota padrão (`0.0.0.0/0`) que direciona o tráfego ao Internet Gateway.
-- **`tags`**: Adiciona tags ao recurso, como nome do projeto e ambiente.
-
-#### **3. Arquivo `public.tf`**
-Associa as sub-redes públicas à tabela de rotas:
-
-```hcl
-data "aws_subnets" "all" {
-  filter {
-    name   = "tag:Tier"
-    values = ["Public"]
-  }
-  filter {
-    name   = "vpc-id"
-    values = ["${data.aws_vpc.vpc.id}"]
-  }
-}
-
-resource "aws_route_table_association" "public_association" {
-  for_each       = data.aws_subnet.public
-  subnet_id      = "${each.value.id}"
-  route_table_id = "${aws_route_table.to-igw.id}"
-}
-```
-
-**Explicação**:
-- **`aws_subnets`**: Busca as sub-redes na VPC com a tag `Tier=Public`.
-- **`aws_route_table_association`**: Associa cada sub-rede pública à tabela de rotas `to-igw`.
-
-#### **4. Arquivo `vars.tf`**
-Define variáveis reutilizáveis para o projeto:
-
-```hcl
-variable "project" {
-  default = "fiap-lab"
-}
-
-variable "env" {
-  default = "prod"
-}
-
-variable "AWS_REGION" {
-  default = "us-east-1"
-}
-
 data "aws_vpc" "vpc" {
-  tags = {
-    Name = "${var.project}"
-  }
+  tags = { Name = var.project }
 }
 
 data "aws_internet_gateway" "igw" {
   filter {
     name   = "attachment.vpc-id"
-    values = ["${data.aws_vpc.vpc.id}"]
+    values = [data.aws_vpc.vpc.id]
   }
 }
 ```
 
-**Explicação**:
-- **`variable`**: Define variáveis como o nome do projeto, ambiente e região AWS.
-- **`data aws_vpc`**: Recupera informações da VPC usando o nome como filtro.
-- **`data aws_internet_gateway`**: Busca o Internet Gateway associado à VPC.
+**`routetable.tf`** cria a rota padrão para a internet:
 
----
-
-Aqui está um diagrama para resumir o funcionamento:
-
-```
-+-----------------------------+
-|          AWS VPC           |
-|       (fiap-lab-prod)       |
-|                             |
-|  +-----------------------+  |
-|  |    Public Subnet 1    |  |
-|  +-----------------------+  |
-|          . . .             |
-|  +-----------------------+  |
-|  |    Public Subnet N    |  |
-|  +-----------------------+  |
-|                             |
-|  +-----------------------+  |
-|  |    Route Table (to-igw) | |
-|  |  --------------------   | |
-|  |  Default Route:         | |
-|  |  0.0.0.0/0 -> IGW       | |
-|  +-----------------------+  |
-|                             |
-+-------------+---------------+
-              |
-              v
-   +-----------------------+
-   |  Internet Gateway     |
-   |       (IGW)           |
-   +-----------------------+
-              |
-              v
-        Internet Access
+```hcl
+resource "aws_route_table" "to-igw" {
+  vpc_id = data.aws_vpc.vpc.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = data.aws_internet_gateway.igw.id
+  }
+  tags = { Name = "to-igw-${var.project}", env = var.env }
+}
 ```
 
-Esse desenho reflete como os componentes estão conectados:
-1. As sub-redes públicas associadas à tabela de rotas.
-2. A tabela de rotas apontando para o Internet Gateway.
-3. O acesso à internet configurado pela rota padrão.
+**`public.tf`** descobre as subnets públicas (pela tag `Tier=Public`) e associa cada uma à route table:
+
+```hcl
+data "aws_subnets" "all" {
+  filter { name = "tag:Tier", values = ["Public"] }
+  filter { name = "vpc-id",   values = [data.aws_vpc.vpc.id] }
+}
+
+data "aws_subnet" "public" {
+  for_each = toset(data.aws_subnets.all.ids)
+  id       = each.value
+}
+
+resource "aws_route_table_association" "public_association" {
+  for_each       = data.aws_subnet.public
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.to-igw.id
+}
+```
+
+Esse é o padrão profissional: **um módulo entrega a rede, outro entrega o roteamento**, e o segundo descobre o primeiro por tags — sem acoplamento rígido.
+
+Documentação oficial: [aws_route_table](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route_table) · [for_each](https://developer.hashicorp.com/terraform/language/meta-arguments/for_each)
 
 </blockquote>
 </details>
 
-11.  Analise o código, olhe os resultados no painel do serviço VPC e faça questionamentos. Foi criada uma VPC com uma subnet publica para cada zona de disponibilidade e as rotas para um internet gateway também criado via código.
+---
+
+<a id="passo-10"></a>
+
+**10.** Analise o resultado no [painel VPC → Route Tables](https://us-east-1.console.aws.amazon.com/vpc/home?region=us-east-1#RouteTables:). Você verá a route table `to-igw-fiap-lab` com a rota `0.0.0.0/0` para o IGW, associada às subnets públicas. Olhe o código, compare com o console e faça perguntas: foi criada uma VPC com uma subnet pública por AZ e as rotas para o Internet Gateway, tudo via módulos.
+
+### Checkpoint
+
+Se chegou até aqui:
+
+- existe uma route table apontando para o IGW
+- todas as subnets públicas estão associadas a ela
+- a rede da Vortex está pronta para receber servidores (próxima demo)
+
+---
+
+## Conclusão
+
+Você componentizou a rede da Vortex em dois módulos reutilizáveis: um para a VPC/subnets/IGW, outro para o roteamento. A raiz (`-call`) só invoca; o módulo define. Mudou a regra de rede? Muda no módulo, uma vez.
+
+**Mensagem para Helena:** a rede agora é um módulo. Para abrir a 31ª cidade, é um `module "vpc"` a mais — não copiar e colar 40 linhas de HCL. O próximo passo é colocar servidores nessa rede e escalá-los só mudando um número.
+
+## Próximo passo
+
+Abra o próximo lab: **[Lab 01.3 — Count](../03-Count/README.md)**.
+
+Lá vamos subir uma frota de servidores web **dentro desta VPC**, atrás de um load balancer, e escalá-la de 2 para 3 e de volta para 1 só mudando o `count` — sem reescrever nada.
+
+> [!CAUTION]
+> **Não destrua a rede agora.** A demo Count usa esta VPC. O `destroy` da rede acontece ao final do Lab 01.3.
+
+---
+
+<details>
+<summary><b>💡 Glossário rápido — termos que aparecem neste lab</b></summary>
+<blockquote>
+
+| Termo | O que é |
+|-------|---------|
+| **Módulo** | Conjunto de `.tf` reutilizável, invocado com `module "x" { source = ... }`. |
+| **VPC** | Virtual Private Cloud — rede virtual isolada na AWS. |
+| **Subnet** | Faixa de IPs dentro da VPC, atrelada a uma zona de disponibilidade. |
+| **AZ (Availability Zone)** | Data center isolado dentro de uma região AWS. |
+| **Internet Gateway (IGW)** | Componente que conecta a VPC à internet. |
+| **Route Table** | Tabela de rotas que diz para onde o tráfego de uma subnet vai. |
+| **Data source** | Bloco `data` que lê recursos existentes (aqui, descobre a VPC por tag). |
+| **`count` / `for_each`** | Meta-argumentos que criam vários recursos a partir de uma definição. |
+| **`cidrsubnet()`** | Função que fatia um bloco CIDR em sub-blocos menores. |
+
+</blockquote>
+</details>
+
+<details>
+<summary><b>💡 Como pedir ajuda se travou</b></summary>
+<blockquote>
+
+Antes de pedir ajuda, colete estas 4 informações:
+
+1. **Em que passo você está** (ex.: "passo 9, `apply` do RT-call")
+2. **Mensagem de erro literal** (texto do terminal, não screenshot)
+3. **Saída de** `terraform output` (na pasta `vpc-call`) e `aws sts get-caller-identity`
+4. **O que você já tentou**
+
+Canais (em ordem de prioridade):
+
+- **Issues do repositório**: [github.com/vamperst/FIAP-Platform-Engineering/issues](https://github.com/vamperst/FIAP-Platform-Engineering/issues)
+- **E-mail do professor**: `Rafael@rfbarbosa.com`
+- **Antes de tudo**: se o `RT-call` reclamar que não acha a VPC, confirme que a Parte 1 (`vpc-call`) rodou com sucesso — o módulo de route table **descobre** a VPC por tag e precisa que ela exista.
+
+</blockquote>
+</details>

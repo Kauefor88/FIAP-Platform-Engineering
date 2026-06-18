@@ -1,237 +1,457 @@
-1. Execute o comando `cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/03-Count/` para entrar no diretório do exercício.
-2. Execute o comando `terraform init`
-3. Execute o comando `terraform apply -auto-approve`
+# 01.3 - Count: escalando a frota de servidores da Vortex
+
+> **Quinta-feira, 11h. Mês 1 na Vortex Mobility.**
+> O lançamento na nova cidade dobrou o tráfego no app da Vortex. Helena chega com a pressão da operação:
+>
+> > *— "Um servidor web não aguenta o pico do horário de almoço. Preciso de uma **frota** atrás de um load balancer, e preciso conseguir **escalar** rápido: de 2 para 5 servidores numa tarde de promoção, e de volta para 2 à noite. Não quero reescrever a infra cada vez — quero mudar **um número**."*
+>
+> Diego sorri: *— "É exatamente para isso que existe o `count`. Você descreve **um** servidor e diz quantos quer. O Terraform cuida do resto, inclusive de registrar no balanceador."*
+
+Os comandos `bash` rodam **no terminal do Codespaces**. As verificações são feitas **no console da AWS** (painel EC2 / Load Balancer).
+
+> [!WARNING]
+> **Pré-requisitos obrigatórios antes de começar:**
+>
+> - [ ] [Lab 01.2 — Módulos](../02-Modules/README.md) concluído **e a rede ainda de pé** (a frota vai nascer dentro daquela VPC)
+> - [ ] Credenciais AWS do Academy atualizadas no Codespaces
+> - [ ] Par de chaves `vockey` em `/home/vscode/.ssh/vockey.pem`
+> - [ ] Você consegue abrir o [painel EC2 → Load Balancers](https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#LoadBalancers:)
+>
+> **Valide rapidamente que a rede do lab anterior existe:**
+>
+> ```bash
+> aws ec2 describe-vpcs --filters "Name=tag:Name,Values=fiap-lab" --query "Vpcs[].VpcId" --output text
+> ```
+>
+> Se imprimir um `vpc-...`, a rede está de pé e você pode seguir. Se vier vazio, volte ao [Lab 01.2](../02-Modules/README.md) e suba a VPC primeiro.
+>
+> **O que você vai fazer:** subir uma frota de 2 servidores web atrás de um Classic Load Balancer, escalar para 3, reduzir para 1, e destruir tudo (frota + rede). **Tempo estimado: ~30 min.**
+
+## Principais pontos de aprendizagem
+
+- usar `count` para criar N cópias de um recurso a partir de uma única definição
+- referenciar todas as cópias com a expressão splat (`aws_instance.web[*].id`)
+- registrar a frota automaticamente em um Classic Load Balancer (`aws_elb`)
+- escalar para cima e para baixo mudando apenas o `count`
+
+## O que você terá ao final
+
+Uma frota de servidores web da Vortex atrás de um load balancer, que escala de 2 para N **mudando um número** — exatamente o controle de capacidade que Helena pediu para os picos.
+
+> [!TIP]
+> Sempre que encontrar um bloco **💡 Clique para entender**, abra-o.
+
+## Mapa do lab
+
+| Parte | O que você faz | Passos | Tempo |
+|-------|----------------|--------|-------|
+| [Parte 1](#parte-1---subindo-a-frota-inicial) | Subindo a frota inicial (count = 2) | [1](#passo-1) · [2](#passo-2) · [3](#passo-3) · [4](#passo-4) · [5](#passo-5) · [6](#passo-6) | ~15 min |
+| [Parte 2](#parte-2---escalando-a-frota) | Escalando a frota (2 → 3 → 1) e destruindo | [7](#passo-7) · [8](#passo-8) · [9](#passo-9) · [10](#passo-10) · [11](#passo-11) · [12](#passo-12) | ~15 min |
+
+> [!TIP]
+> Se travou em algum passo, clique no número dele na coluna **Passos**.
+
+## Por que essa abordagem existe
+
+| Aspecto | Resposta curta |
+|---------|----------------|
+| **Problema de negócio** | A Vortex precisa variar a capacidade de servidores conforme o tráfego, rápido e sem retrabalho. |
+| **Pergunta que responde bem** | "Quero N servidores idênticos atrás de um balanceador." |
+| **Pergunta que responde mal** | "Quero servidores **diferentes entre si**" — aí `count` é fraco e `for_each` ou módulos servem melhor. |
+| **Quando acontece na vida real** | Escalar web servers, workers de fila, réplicas de processamento batch. |
+
+## Contexto
+
+`count` é o jeito mais direto de criar várias cópias de um recurso. Você descreve a EC2 uma vez e diz `count = 2`; o Terraform cria `aws_instance.web[0]` e `aws_instance.web[1]`. O Classic Load Balancer (`aws_elb`) recebe a lista de IDs de todas as instâncias via splat (`aws_instance.web[*].id`) e as registra automaticamente. Para escalar, você muda o número e roda `apply` de novo — o Terraform calcula o delta (criar/destruir a diferença).
+
+```mermaid
+flowchart TD
+    LB["Classic Load Balancer<br/>(aws_elb)"]
+    LB --> I0["aws_instance.web[0]<br/>nginx-001"]
+    LB --> I1["aws_instance.web[1]<br/>nginx-002"]
+    LB -. "count = 3 adiciona" .-> I2["aws_instance.web[2]<br/>nginx-003"]
+    style I2 stroke-dasharray: 5 5
+```
+
+---
+
+## Parte 1 - Subindo a frota inicial
+
+### Resultado esperado desta parte
+
+Dois servidores Nginx registrados em um Classic Load Balancer, acessíveis pelo DNS do balanceador.
+
+---
+
+<a id="passo-1"></a>
+
+**1.** Entre na pasta da demo:
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/03-Count
+```
+
+---
+
+<a id="passo-2"></a>
+
+**2.** Inicialize:
+
+```bash
+terraform init
+```
+
+---
+
+<a id="passo-3"></a>
+
+**3.** Aplique para criar a frota inicial:
+
+```bash
+terraform apply -auto-approve
+```
 
 <details>
-<summary> 
-<b>Explicação Código Terraform</b>
-
-</summary>
-
+<summary><b>💡 Clique para entender: o código real desta demo</b></summary>
 <blockquote>
 
-Aqui está uma explicação da ordem de execução dos arquivos `.tf`, detalhando o fluxo de trabalho do Terraform e como os recursos são criados com base no seu código:
+Esta demo usa um **Classic Load Balancer** (recurso `aws_elb`), não um Application Load Balancer. São coisas diferentes na AWS — o Classic ELB é mais simples (sem target group, sem listener com ARN), o que o torna didático para focar no `count`.
 
----
+**`versions.tf`** declara os providers (`aws ~> 6.0` e `random ~> 3.0`).
 
-### **1. `variables.tf`**
+**`variables.tf`** define a região e descobre a AMI dinamicamente (Amazon Linux 2023), além das variáveis da chave SSH:
 
-Este arquivo define as variáveis que serão usadas em outros arquivos do Terraform. É a base para parametrizar o código, permitindo flexibilidade sem alterar diretamente os arquivos principais.
-
-**Exemplo do arquivo:**
 ```hcl
-variable "instance_count" {
-  description = "Number of EC2 instances"
-  default     = 1
-}
-
-variable "ami_id" {
-  description = "AMI ID for the EC2 instance"
-}
-
-variable "instance_type" {
-  description = "Instance type for EC2"
-  default     = "t2.micro"
-}
-```
-
-**Execução:**
-- Carrega os valores padrão ou os valores fornecidos pelo usuário no momento da execução.
-- Esses valores são usados em outros arquivos para configurar recursos dinamicamente.
-
----
-
-### **2. `securitygroup.tf`**
-
-Este arquivo cria um grupo de segurança para gerenciar regras de firewall de entrada e saída, garantindo acesso seguro às instâncias EC2.
-
-**Exemplo do arquivo:**
-```hcl
-resource "aws_security_group" "web" {
-  name_prefix = "web-sg"
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-x86_64"]
   }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
   }
 }
 ```
 
-**Execução:**
-- Este recurso é criado antes das instâncias EC2, pois é necessário definir regras de segurança que serão associadas às instâncias.
-- Permite tráfego HTTP (porta 80) e todo o tráfego de saída.
+**`main.tf`** descobre a rede do Lab 01.2, sorteia uma subnet, cria o ELB e a frota:
 
----
-
-### **3. `main.tf`**
-
-Este é o arquivo principal que configura os recursos da AWS, como instâncias EC2. Ele faz referência ao grupo de segurança criado anteriormente e utiliza as variáveis definidas em `variables.tf`.
-
-**Exemplo do arquivo:**
 ```hcl
+# Descobre a VPC e as subnets publicas criadas no Lab 01.2 (por tag).
+data "aws_vpc" "vpc" {
+  tags = { Name = var.project }
+}
+
+data "aws_subnets" "all" {
+  filter { name = "tag:Tier", values = ["Public"] }
+  filter { name = "vpc-id",   values = [data.aws_vpc.vpc.id] }
+}
+
+data "aws_subnet" "public" {
+  for_each = toset(data.aws_subnets.all.ids)
+  id       = each.value
+}
+
+# Sorteia uma subnet publica para hospedar as instancias.
+resource "random_shuffle" "random_subnet" {
+  input        = [for s in data.aws_subnet.public : s.id]
+  result_count = 1
+}
+
+# Classic Load Balancer: distribui o trafego HTTP entre as instancias.
+resource "aws_elb" "web" {
+  name            = "terraform-example-elb"
+  subnets         = data.aws_subnets.all.ids
+  security_groups = [aws_security_group.allow-ssh.id]
+
+  listener {
+    instance_port     = 80
+    instance_protocol = "http"
+    lb_port           = 80
+    lb_protocol       = "http"
+  }
+
+  health_check {
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 3
+    target              = "HTTP:80/"
+    interval            = 6
+  }
+
+  # As instancias da frota sao registradas automaticamente.
+  instances = aws_instance.web[*].id
+}
+
+# A frota. count = 2 cria duas EC2 identicas; mudar esse numero escala a frota.
 resource "aws_instance" "web" {
-  count         = var.instance_count
-  ami           = var.ami_id
-  instance_type = var.instance_type
-  security_groups = [aws_security_group.web.name]
+  instance_type = "t3.micro"
+  ami           = data.aws_ami.amazon_linux.id
+  count         = 2
+
+  subnet_id              = random_shuffle.random_subnet.result[0]
+  vpc_security_group_ids = [aws_security_group.allow-ssh.id]
+  key_name               = var.key_name
+
+  provisioner "file" {
+    source      = "script.sh"
+    destination = "/tmp/script.sh"
+  }
+  provisioner "remote-exec" {
+    inline = ["chmod +x /tmp/script.sh", "sudo /tmp/script.sh"]
+  }
+  connection {
+    user        = var.instance_username
+    private_key = file(var.path_to_key)
+    host        = self.public_dns
+  }
 
   tags = {
-    Name = "WebServer-${count.index}"
-  }
-
-  provisioner "remote-exec" {
-    inline = [
-      "bash script.sh"
-    ]
+    Name = format("nginx-%03d", count.index + 1)
   }
 }
 ```
 
-**Execução:**
-- Cria as instâncias EC2 com base nos valores de `variables.tf`.
-- Associa o grupo de segurança criado em `securitygroup.tf`.
-- O `provisioner` usa o script `script.sh` para instalar e configurar o NGINX nas instâncias criadas.
+Pontos-chave:
 
----
+- `count = 2` cria `aws_instance.web[0]` e `aws_instance.web[1]`
+- `aws_instance.web[*].id` é a expressão **splat**: a lista de IDs de **todas** as cópias, entregue ao ELB no atributo `instances`
+- `format("nginx-%03d", count.index + 1)` nomeia as máquinas `nginx-001`, `nginx-002`, ...
+- `random_shuffle` escolhe uma subnet pública para as instâncias
 
-### **4. `script.sh`**
+**`securitygroup.tf`** cria o SG `allow-ssh` liberando 22 e 80. **`script.sh`** instala o Nginx via `dnf` (Amazon Linux 2023). **`outputs.tf`** expõe o DNS do ELB e os endereços das instâncias.
 
-Este script é executado nas instâncias EC2 durante a criação para instalar e iniciar o servidor NGINX.
-
-**Conteúdo do script:**
-```bash
-#!/bin/bash
-
-# Instalação do NGINX
-sudo yum update -y
-sudo amazon-linux-extras list | grep nginx
-sudo yum clean metadata -y
-sudo yum -y install nginx -y
-sudo amazon-linux-extras install nginx1 -y
-
-# Inicialização do NGINX
-sudo systemctl start nginx
-```
-
-**Execução:**
-- É invocado pelo `provisioner` definido no `main.tf`.
-- Realiza atualizações no sistema, instala o NGINX e garante que ele seja iniciado.
-
----
-
-### **Ordem de Execução Completa**
-
-1. **Carregamento de variáveis (`variables.tf`)**
-   - Define os valores necessários para os recursos.
-
-2. **Criação do grupo de segurança (`securitygroup.tf`)**
-   - Configura as regras de acesso para as instâncias.
-
-3. **Criação das instâncias EC2 (`main.tf`)**
-   - Usa as variáveis e associa o grupo de segurança.
-   - Configura o script para provisionar as instâncias.
-
-4. **Execução do script (`script.sh`)**
-   - Instala e configura o NGINX nas instâncias criadas.
+Documentação oficial: [aws_elb (Classic)](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elb) · [count](https://developer.hashicorp.com/terraform/language/meta-arguments/count) · [splat expressions](https://developer.hashicorp.com/terraform/language/expressions/references#references-to-resource-attributes)
 
 </blockquote>
 </details>
 
+---
 
-5. Aguarde alguns minutos para que todas as maquinas estejam prontas no ELB e o script terraform termine com sucesso. Após o termino no [painel](https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#LoadBalancer:loadBalancerArn=terraform-example-elb;tab=targetInstances) note que o ELB estará com todas as maquinas em estado `Fora de serviço`.
+<a id="passo-4"></a>
+
+**4.** Aguarde alguns minutos para as máquinas ficarem prontas e o `apply` terminar. No [painel do Load Balancer](https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#LoadBalancers:) → aba **Instances/Targets**, você verá inicialmente as máquinas em estado **Fora de serviço (OutOfService)** enquanto o ELB faz as verificações de integridade.
 
 <details>
-<summary> 
-<b>Explicação Tempo de demora para inserir instância EC2 no ALB</b>
-
-</summary>
-
+<summary><b>💡 Clique para entender: por que a instância demora a entrar no ELB</b></summary>
 <blockquote>
 
-Quando você adiciona uma instância EC2 a um Application Load Balancer (ALB) da AWS, pode levar alguns instantes para que ela fique disponível para acesso. Isso ocorre devido a vários fatores e processos que acontecem nos bastidores. Vamos explorar as principais razões:
+Ao registrar uma instância no Classic Load Balancer, ela não recebe tráfego imediatamente. O ELB faz **health checks** antes de considerá-la saudável:
 
-## Registro do Alvo
+- **Registro do alvo:** o ELB reconhece a nova instância e a inclui no pool.
+- **Health checks:** o ELB tenta conectar na porta 80 e avaliar a resposta (no nosso `health_check`, `target = "HTTP:80/"`, `interval = 6s`, `healthy_threshold = 2`). Só após 2 respostas saudáveis seguidas a instância vira `InService`.
+- **Propagação:** o nome DNS do ELB leva alguns instantes para refletir o novo alvo.
 
-Ao adicionar uma instância EC2 ao ALB, ela é registrada como um alvo em um [grupo de destino](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html). O ALB precisa de tempo para reconhecer o novo alvo e incluí-lo em seu processo de roteamento.
+Por isso é normal ver `OutOfService` logo após o `apply` — o Nginx ainda está subindo e o ELB ainda não validou a máquina. Aguarde os health checks passarem.
 
-## Verificações de Integridade
-
-O ALB realiza [verificações de integridade](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) nos alvos registrados para garantir que estejam prontos para receber tráfego. Essas verificações incluem:
-
-1. Tentativas de conexão com a instância EC2
-2. Verificação da resposta da aplicação
-3. Avaliação do status de saúde com base nas respostas recebidas
-
-O ALB só começará a enviar tráfego para a instância quando ela passar nas verificações de integridade.
-
-## Propagação de DNS
-
-O ALB utiliza um [nome DNS](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html#load-balancer-dns-name) para distribuir o tráfego. Quando uma nova instância é adicionada, pode haver um breve período para que as atualizações de DNS se propaguem, permitindo que o tráfego seja roteado para o novo alvo.
-
-## Warm-up Time
-
-Para evitar sobrecarregar novas instâncias, o ALB implementa um período de [warm-up](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html#target-group-attributes) durante o qual o tráfego é gradualmente aumentado para o novo alvo.
-
-## Considerações de Rede
-
-Se a instância EC2 estiver em uma VPC diferente ou tiver configurações de segurança específicas, pode haver um tempo adicional para estabelecer as conexões de rede necessárias.
-
-Esses processos garantem que o ALB distribua o tráfego apenas para instâncias saudáveis e prontas, melhorando a confiabilidade e o desempenho geral do sistema. Embora isso possa causar um pequeno atraso na disponibilidade, é crucial para manter a integridade e a eficácia do balanceamento de carga.
+Documentação oficial: [Health checks do Classic Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/elb-healthchecks.html)
 
 </blockquote>
 </details>
 
-   ![still](images/stillinregistration.png)
+![still](images/stillinregistration.png)
 
-6. Aguarde até que todas estejam em `Em serviço`.
+---
 
-   ![inservice](images/inservice2.png)
+<a id="passo-5"></a>
 
-7. Utilize o dns do ELB fornecido como saida no terraform no Codespaces para colar no navegador e testar o funcionamento da Stack
+**5.** Aguarde até que todas as máquinas estejam **Em serviço (InService)**.
 
-   ![dnsc9](images/dnsc9.png)
+![inservice](images/inservice2.png)
 
-   ![nginx1](images/nginx1.png)
+---
 
-8. Abra o arquivo main.tf com o comando `code main.tf` e altere o valor do count para 3 na linha 67.
+<a id="passo-6"></a>
 
-   ![countmod](images/countmod.png)
+**6.** Copie o DNS do ELB (saída `elb_public` do Terraform no Codespaces) e cole no navegador para testar a stack.
 
-9. Execute o comando `terraform plan` para verificar o que será alterado. Note que tem 1 item para adicionar e 1 para alterar. O item para adicionar é a nova maquina e o item para alterar é o ELB que terá que adicionar a nova maquina.
+![dnsc9](images/dnsc9.png)
 
-   ![plan](images/plan.png)
+![nginx1](images/nginx1.png)
 
-10. Execute novamente o comando `terraform apply -auto-approve`
+### Checkpoint
 
-   ![apply2](images/apply2.png)
+Se chegou até aqui:
 
-11. Note no [painel da AWS](https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#LoadBalancer:loadBalancerArn=terraform-example-elb;tab=targetInstances) que a maquina foi criada e já colocado no ELB
+- duas instâncias `nginx-001` e `nginx-002` estão rodando
+- ambas aparecem `InService` no ELB
+- o DNS do ELB serve a página do Nginx
 
-   ![inservice3](images/inservice3.png)
+---
 
-12. Vá novamente até o arquivo `main.tf` e altere o valor do count para 1
+## Parte 2 - Escalando a frota
 
-      ![countmod2](images/countmod3.png)
+### Resultado esperado desta parte
 
-13. Execute novamente o comando `terraform apply -auto-approve`
+Você terá escalado a frota de 2 para 3 e de volta para 1 mudando apenas o `count`, observando o Terraform calcular o delta, e destruído tudo no final.
 
-    ![countmod2](images/countmod2.png)
+---
 
-14. Dessa vez no [painel da AWS](https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#LoadBalancer:loadBalancerArn=terraform-example-elb;tab=targetInstances) foram 2 destruições de maquina e uma alteração no ELB
+<a id="passo-7"></a>
 
-    ![service1](images/inservice1.png)
+**7.** Abra o `main.tf` e altere o `count` da `aws_instance.web` para `3`:
 
-15. Execute o comando `terraform destroy -auto-approve`
+```bash
+code main.tf
+```
 
+No bloco `resource "aws_instance" "web"`, troque `count = 2` por `count = 3`.
 
-### Exercicio
-Caso deseje fazer um exercicio prático para ajudar a fixar o conteudo faça o proposto na seguinte página: [Exercício](../../exercicios/count/README.md)
+![countmod](images/countmod.png)
+
+---
+
+<a id="passo-8"></a>
+
+**8.** Veja o plano: deve haver **1 a adicionar** (a nova máquina) e **1 a alterar** (o ELB, que passa a referenciar a máquina nova):
+
+```bash
+terraform plan
+```
+
+![plan](images/plan.png)
+
+---
+
+<a id="passo-9"></a>
+
+**9.** Aplique a mudança:
+
+```bash
+terraform apply -auto-approve
+```
+
+![apply2](images/apply2.png)
+
+No [painel do Load Balancer](https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#LoadBalancers:), a terceira máquina foi criada e registrada.
+
+![inservice3](images/inservice3.png)
+
+---
+
+<a id="passo-10"></a>
+
+**10.** Volte ao `main.tf` e reduza o `count` para `1`:
+
+```bash
+code main.tf
+```
+
+![countmod2](images/countmod3.png)
+
+---
+
+<a id="passo-11"></a>
+
+**11.** Aplique de novo. Desta vez serão **2 destruições** de máquina e **1 alteração** no ELB:
+
+```bash
+terraform apply -auto-approve
+```
+
+![countmod2](images/countmod2.png)
+
+No [painel do Load Balancer](https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#LoadBalancers:) restará uma única máquina.
+
+![service1](images/inservice1.png)
+
+---
+
+<a id="passo-12"></a>
+
+**12.** Destrua **toda** a infra deste lab — a frota e também a rede criada no Lab 01.2. Primeiro a frota (estamos na pasta `03-Count`):
+
+```bash
+terraform destroy -auto-approve
+```
+
+Depois destrua as route tables e a VPC, na ordem inversa em que foram criadas:
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/RT-call && terraform destroy -auto-approve
+```
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/vpc-call && terraform destroy -auto-approve
+```
+
+<details>
+<summary><b>⚠ Se der erro: <code>DependencyViolation</code> ao destruir a VPC</b></summary>
+<blockquote>
+
+Causa: ainda há recurso preso na VPC (uma EC2 ou o ELB não terminou de morrer). Confirme que o `destroy` da pasta `03-Count` terminou de fato (sem instâncias `running` no painel EC2) e que o `destroy` do `RT-call` rodou antes do `vpc-call`. Depois rode o `destroy` da VPC de novo.
+
+</blockquote>
+</details>
+
+### Checkpoint
+
+Se chegou até aqui:
+
+- você escalou a frota 2 → 3 → 1 só mudando o `count`
+- destruiu a frota, as route tables e a VPC
+- não há mais nada cobrando na conta
+
+---
+
+## Conclusão
+
+Você escalou uma frota inteira mudando um único número. O `count` transforma capacidade em parâmetro, e o ELB acompanha automaticamente. Esse é o controle elástico que toda operação web precisa.
+
+**Mensagem para Helena:** a frota da Vortex agora é elástica. Pico de almoço? `count = 6`. Madrugada? `count = 2`. Um número, um `apply`, e o load balancer se ajusta sozinho. O próximo problema é mais sutil: à medida que o time cresce, **onde fica o estado** dessa infra para todos trabalharem sem se atropelar?
+
+## Próximo passo
+
+Abra o próximo lab: **[Lab 01.4 — State remoto](../04-State/README.md)**.
+
+Lá vamos mover o estado do Terraform para um bucket S3 compartilhado, para que o time inteiro da Vortex colabore na mesma infraestrutura sem corromper o estado.
+
+> [!CAUTION]
+> **Custo:** este lab roda até 3 EC2 `t3.micro` (~$0,01/h cada) + 1 Classic ELB (~$0,025/h). Confirme no painel EC2 que **nenhuma** instância ficou `running` e que o load balancer sumiu após o passo 12. Esquecer ligado por um dia consome alguns dólares do orçamento do Learner Lab.
+
+---
+
+### Exercício
+
+Para fixar, faça o exercício prático: **[Exercício — Count com SQS](../../exercicios/count/README.md)**.
+
+---
+
+<details>
+<summary><b>💡 Glossário rápido — termos que aparecem neste lab</b></summary>
+<blockquote>
+
+| Termo | O que é |
+|-------|---------|
+| **`count`** | Meta-argumento que cria N cópias indexadas de um recurso (`.web[0]`, `.web[1]`...). |
+| **`count.index`** | Índice (0, 1, 2...) da cópia atual, usado para diferenciar nomes/tags. |
+| **Splat (`[*]`)** | Expressão que coleta um atributo de todas as cópias numa lista (`aws_instance.web[*].id`). |
+| **Classic Load Balancer (`aws_elb`)** | Balanceador de carga "clássico" da AWS, anterior ao ALB. Simples, sem target groups. |
+| **Health check** | Verificação periódica que o balanceador faz para decidir se uma instância recebe tráfego. |
+| **`random_shuffle`** | Recurso do provider `random` que embaralha uma lista; aqui sorteia uma subnet. |
+| **InService / OutOfService** | Estados de uma instância no Classic ELB (saudável / reprovada no health check). |
+
+</blockquote>
+</details>
+
+<details>
+<summary><b>💡 Como pedir ajuda se travou</b></summary>
+<blockquote>
+
+Antes de pedir ajuda, colete estas 4 informações:
+
+1. **Em que passo você está** (ex.: "passo 9, escalei para 3")
+2. **Mensagem de erro literal** (texto do terminal)
+3. **Saída de** `terraform output` e do filtro de VPC do checklist de pré-requisitos
+4. **O que você já tentou**
+
+Canais (em ordem de prioridade):
+
+- **Issues do repositório**: [github.com/vamperst/FIAP-Platform-Engineering/issues](https://github.com/vamperst/FIAP-Platform-Engineering/issues)
+- **E-mail do professor**: `Rafael@rfbarbosa.com`
+- **Antes de tudo**: se o `apply` falhar reclamando que não acha a VPC ou subnets, a rede do Lab 01.2 não está de pé. Rode o filtro de VPC do checklist; se vier vazio, volte ao Lab 01.2.
+
+</blockquote>
+</details>
