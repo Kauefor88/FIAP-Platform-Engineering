@@ -3,21 +3,28 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "aws_amis" {
-  type = map(string)
-  default = {
-    us-east-1 = "ami-087c17d1fe0178315"
-    us-west-2 = "ami-06b94666"
-    eu-west-1 = "ami-844e0bf7"
+# Busca dinamica da Amazon Linux 2023 mais recente, evitando AMIs hardcoded que expiram.
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
   }
 }
 
-variable "KEY_NAME" {
+variable "key_name" {
   default = "vockey"
 }
-variable "PATH_TO_KEY" {
+variable "path_to_key" {
   default = "/home/vscode/.ssh/vockey.pem"
 }
-variable "INSTANCE_USERNAME" {
+variable "instance_username" {
   default = "ec2-user"
 }

@@ -3,15 +3,15 @@ variable "project" {
 }
 
 data "aws_vpc" "vpc" {
-    tags = {
-        Name = "${var.project}"
-    }
+  tags = {
+    Name = var.project
+  }
 }
 
 data "aws_internet_gateway" "igw" {
   filter {
-    name = "attachment.vpc-id"
-    values = ["${data.aws_vpc.vpc.id}"]
+    name   = "attachment.vpc-id"
+    values = [data.aws_vpc.vpc.id]
   }
 }
 
@@ -20,9 +20,9 @@ variable "env" {
 }
 
 output "vpc_id" {
-    value = "${data.aws_vpc.vpc.id}"
+  value = data.aws_vpc.vpc.id
 }
 
-variable "AWS_REGION" {
+variable "aws_region" {
   default = "us-east-1"
 }

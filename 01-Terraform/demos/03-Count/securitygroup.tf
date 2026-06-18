@@ -1,6 +1,6 @@
 resource "aws_security_group" "allow-ssh" {
-  vpc_id      = "${data.aws_vpc.vpc.id}"
-  name        = "allow-ssh"
+  vpc_id = data.aws_vpc.vpc.id
+  name   = "allow-ssh"
 
   egress {
     from_port   = 0

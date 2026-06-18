@@ -14,6 +14,6 @@ variable "env" {
   default = "prod"
 }
 
-variable "AWS_REGION" {
+variable "aws_region" {
   default = "us-east-1"
 }

@@ -1,23 +1,23 @@
-
-
 resource "aws_instance" "example" {
-  ami = "${lookup(var.AMIS, var.AWS_REGION)}"
+  ami           = data.aws_ami.amazon_linux.id
   instance_type = "t3.micro"
-  key_name = "${var.KEY_NAME}"
+  key_name      = var.key_name
 
   provisioner "file" {
-    source = "script.sh"
+    source      = "script.sh"
     destination = "/tmp/script.sh"
   }
+
   provisioner "remote-exec" {
     inline = [
       "chmod +x /tmp/script.sh",
-      "sudo /tmp/script.sh"
+      "sudo /tmp/script.sh",
     ]
   }
+
   connection {
-    user = "${var.INSTANCE_USERNAME}"
-    private_key = "${file("${var.PATH_TO_KEY}")}"
-    host = "${aws_instance.example.public_dns}"
+    user        = var.instance_username
+    private_key = file(var.path_to_key)
+    host        = self.public_dns
   }
 }

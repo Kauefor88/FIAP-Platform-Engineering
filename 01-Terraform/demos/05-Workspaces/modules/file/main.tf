@@ -1,8 +1,7 @@
 locals {
-  env = "${terraform.workspace}"
+  env = terraform.workspace
 
-  // Isolate variables used for different workspaces
-  // using map
+  // Isolate variables used for different workspaces using a map
   context = {
     default = {
       name = "${var.filename}-dev.txt"
@@ -18,11 +17,11 @@ locals {
     }
   }
 
-  context_variables = "${local.context[local.env]}"
+  context_variables = local.context[local.env]
 }
 
 // Creates a new local file with the given filename and content
 resource "local_file" "test" {
-  content     = "${local.env}"
-  filename = "${path.module}/${lookup(local.context_variables, "name")}"
+  content  = local.env
+  filename = "${path.module}/${local.context_variables.name}"
 }

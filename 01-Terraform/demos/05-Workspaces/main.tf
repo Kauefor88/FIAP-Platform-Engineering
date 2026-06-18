@@ -1,4 +1,4 @@
 module "localfile" {
-  source = "./modules/file"
+  source   = "./modules/file"
   filename = "your-file-name"
 }

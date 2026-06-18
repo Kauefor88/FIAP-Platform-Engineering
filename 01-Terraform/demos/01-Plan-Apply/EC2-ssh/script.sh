@@ -1,11 +1,9 @@
 #!/bin/bash
 
-# install nginx
-sudo yum update -y
-sudo amazon-linux-extras list | grep nginx
-sudo yum clean metadata -y
-sudo yum -y install nginx -y
-sudo amazon-linux-extras install nginx1 -y
+# Amazon Linux 2023 usa dnf e entrega nginx direto nos repositorios padrao
+# (o antigo amazon-linux-extras nao existe mais nessa versao).
+sudo dnf update -y
+sudo dnf install -y nginx
 
-# make sure nginx is started
-sudo systemctl start nginx
+# Garante que o nginx suba agora e tambem apos reboot.
+sudo systemctl enable --now nginx

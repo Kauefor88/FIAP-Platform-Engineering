@@ -1,4 +1,3 @@
-
 data "aws_subnets" "all" {
   filter {
     name   = "tag:Tier"
@@ -6,7 +5,7 @@ data "aws_subnets" "all" {
   }
   filter {
     name   = "vpc-id"
-    values = ["${data.aws_vpc.vpc.id}"]
+    values = [data.aws_vpc.vpc.id]
   }
 }
 
@@ -17,15 +16,15 @@ data "aws_subnet" "public" {
 
 resource "aws_route_table_association" "public_association" {
   for_each       = data.aws_subnet.public
-  subnet_id      = "${each.value.id}"
-  route_table_id = "${aws_route_table.to-igw.id}"
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.to-igw.id
 }
 
 
 output "subnet_qtd_public" {
-  value      = "${length(data.aws_subnet.public.*)}"
+  value = length(data.aws_subnet.public)
 }
 
 output "subnet_cidr_blocks_public" {
-  value = ["${data.aws_subnet.public.*}"]
+  value = [for s in data.aws_subnet.public : s.cidr_block]
 }
