@@ -165,7 +165,7 @@ Três arquivos compõem este exemplo:
 
 ```hcl
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.10"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -175,11 +175,21 @@ terraform {
 }
 ```
 
-**`provider.tf`** — diz ao Terraform em qual região operar:
+**`provider.tf`** — diz ao Terraform em qual região operar e aplica tags de governança a tudo via `default_tags`:
 
 ```hcl
 provider "aws" {
   region = var.aws_region
+
+  # default_tags marca TODOS os recursos deste provider de uma vez,
+  # sem repetir "tags = {...}" em cada bloco.
+  default_tags {
+    tags = {
+      Project   = "vortex-mobility"
+      ManagedBy = "terraform"
+      Lab       = "01-terraform"
+    }
+  }
 }
 ```
 

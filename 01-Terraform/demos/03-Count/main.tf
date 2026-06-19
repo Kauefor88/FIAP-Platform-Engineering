@@ -1,6 +1,15 @@
 # Provider declarado uma vez na raiz desta demo.
 provider "aws" {
   region = var.aws_region
+
+  # default_tags: tags de governanca aplicadas a todos os recursos do provider.
+  default_tags {
+    tags = {
+      Project   = "vortex-mobility"
+      ManagedBy = "terraform"
+      Lab       = "01-terraform"
+    }
+  }
 }
 
 variable "project" {

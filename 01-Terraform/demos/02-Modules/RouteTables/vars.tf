@@ -16,7 +16,13 @@ data "aws_internet_gateway" "igw" {
 }
 
 variable "env" {
-  default = "prod"
+  description = "Ambiente logico."
+  default     = "prod"
+
+  validation {
+    condition     = contains(["dev", "homol", "prod"], var.env)
+    error_message = "env deve ser um de: dev, homol, prod."
+  }
 }
 
 output "vpc_id" {
@@ -24,5 +30,11 @@ output "vpc_id" {
 }
 
 variable "aws_region" {
-  default = "us-east-1"
+  description = "Regiao AWS. O Learner Lab so permite us-east-1 ou us-west-2."
+  default     = "us-east-1"
+
+  validation {
+    condition     = contains(["us-east-1", "us-west-2"], var.aws_region)
+    error_message = "O AWS Academy Learner Lab so permite us-east-1 ou us-west-2."
+  }
 }

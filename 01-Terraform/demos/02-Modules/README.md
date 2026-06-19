@@ -163,7 +163,7 @@ Dentro do módulo `VPC/`:
 data "aws_availability_zones" "available" {}
 
 variable "project"       { default = "fiap-lab" }
-variable "vpc_cidr"      { default = "9.0.0.0/16" }
+variable "vpc_cidr"      { default = "10.0.0.0/16" } # faixa privada RFC 1918
 variable "subnet_escale" { default = 6 }
 variable "env"           { default = "prod" }
 ```
