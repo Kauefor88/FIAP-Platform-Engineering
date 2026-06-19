@@ -48,11 +48,20 @@ A base de rede da Vortex — uma VPC com subnets públicas e rotas para a intern
 |-------|----------------|--------|-------|
 | [Parte 1](#parte-1---subindo-a-vpc-via-módulo) | Subindo a VPC via módulo | [1](#passo-1) · [2](#passo-2) · [3](#passo-3) · [4](#passo-4) · [5](#passo-5) | ~12 min |
 | [Parte 2](#parte-2---subindo-as-route-tables-via-módulo) | Subindo as route tables via módulo | [6](#passo-6) · [7](#passo-7) · [8](#passo-8) · [9](#passo-9) · [10](#passo-10) | ~13 min |
+| [Parte 3](#parte-3---adotando-um-recurso-criado-no-console-import) | Adotando um recurso criado no console (import) | [11](#passo-11) · [12](#passo-12) · [13](#passo-13) · [14](#passo-14) | ~12 min |
+| [Parte 4](#parte-4---refatorando-sem-destruir-moved) | Refatorando sem destruir (moved) | [15](#passo-15) · [16](#passo-16) · [17](#passo-17) | ~8 min |
 
 > [!TIP]
 > Se travou em algum passo, clique no número dele na coluna **Passos**.
 
 ## Contexto
+
+| Aspecto | Resposta curta |
+|---------|----------------|
+| **Problema de negócio** | A Vortex vai abrir em 30 cidades; cada uma precisa da mesma topologia de rede. Copiar e colar 40 linhas de HCL por cidade não escala e diverge com o tempo. |
+| **Pergunta que módulo responde bem** | "Como reutilizar a mesma rede em N ambientes/cidades mudando só os parâmetros?" |
+| **Pergunta que módulo responde mal** | "Como representar uma rede totalmente diferente, sem nada em comum?" (aí o módulo só atrapalha). |
+| **Quando acontece na vida real** | Toda empresa que cresce: a primeira VPC é escrita à mão; na terceira, vira módulo. |
 
 A estrutura de pastas conta a história: as pastas `VPC` e `RouteTables` **definem** módulos (os blocos reutilizáveis); as pastas `vpc-call` e `RT-call` **invocam** esses módulos. A raiz (onde você roda `terraform init`) é sempre a `-call` — ela carrega o provider e chama o módulo.
 
@@ -195,6 +204,22 @@ resource "aws_subnet" "public_igw" {
 - `count = length(...)` cria tantas subnets quantas AZs existirem na região
 - `cidrsubnet(...)` fatia o CIDR da VPC em blocos menores, um por subnet
 - a tag `Tier = "Public"` é o que a Parte 2 vai usar para **descobrir** essas subnets
+
+<details>
+<summary><b>💡 Clique para entender: aqui usamos <code>count</code>, mas e <code>for_each</code>?</b></summary>
+<blockquote>
+
+Esta é uma das decisões mais importantes ao iterar recursos. Usamos `count` aqui porque o conjunto de AZs é estável dentro de uma região e queremos "uma subnet por AZ, na ordem". Mas vale conhecer o trade-off:
+
+- **`count`** indexa por **número** (`aws_subnet.public_igw[0]`, `[1]`, ...). Se um item **no meio** da lista some, todos os índices seguintes "andam uma casa" — o Terraform acha que vários recursos mudaram e pode **destruir e recriar** o que era só um deslocamento.
+- **`for_each`** indexa por **chave** (`aws_subnet.public_igw["us-east-1a"]`). Remover um item afeta **só aquele** — os demais ficam intactos.
+
+Regra prática difundida (Brikman, *Terraform: Up & Running*): use `count` para "N cópias idênticas" e para liga/desliga (`count = var.flag ? 1 : 0`); use **`for_each` quando cada item tem identidade própria** (nomes, AZs, mapas de config). Aqui, como AZs têm identidade, `for_each = toset(data.aws_availability_zones.available.names)` seria a opção mais robusta — mantivemos `count` por ser o primeiro contato e mais simples de ler. Você verá `for_each` em ação na Parte 2 (associações de route table).
+
+Documentação oficial: [for_each](https://developer.hashicorp.com/terraform/language/meta-arguments/for_each) · [count](https://developer.hashicorp.com/terraform/language/meta-arguments/count)
+
+</blockquote>
+</details>
 
 **`igw.tf`** conecta a VPC à internet:
 
@@ -364,11 +389,224 @@ Se chegou até aqui:
 
 ---
 
+## Parte 3 - Adotando um recurso criado no console (import)
+
+> Diego puxa uma cadeira: *— "Lembra que eu falei que a infra da Vortex inteira nasceu clicada no console? Tem um Security Group que alguém criou na mão e ninguém colocou no código ainda. Não dá pra apagar e recriar — tem regra de produção nele. Vamos **adotar** ele no Terraform, sem destruir."*
+
+### Resultado esperado desta parte
+
+Você vai pegar um recurso que existe na AWS mas **não** está no seu código, e trazê-lo para o Terraform com um **`import` block** — sem recriar o recurso. Para simular o "criado na mão", nós mesmos criamos um Security Group pela AWS CLI.
+
+---
+
+<a id="passo-11"></a>
+
+**11.** Crie um Security Group **por fora do Terraform** (simulando o que alguém fez no console), na VPC da Vortex que você acabou de criar:
+
+```bash
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules
+VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=fiap-lab" --query "Vpcs[0].VpcId" --output text)
+SG_ID=$(aws ec2 create-security-group \
+  --group-name vortex-legado-sg \
+  --description "SG criado na mao para demo de import" \
+  --vpc-id "$VPC_ID" \
+  --query 'GroupId' --output text)
+echo "Security Group criado na mão: $SG_ID (na VPC $VPC_ID)"
+```
+
+> [!NOTE]
+> Esse SG agora existe na AWS, mas o Terraform **não sabe** que ele existe — não está em nenhum `.tf` nem no estado. É o cenário clássico de infraestrutura legada.
+
+---
+
+<a id="passo-12"></a>
+
+**12.** Crie uma pasta para este exercício e declare um **`import` block** apontando para o SG. Use o `SG_ID` que apareceu no passo anterior:
+
+```bash
+mkdir -p /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/import-demo
+cd /workspaces/FIAP-Platform-Engineering/01-Terraform/demos/02-Modules/import-demo
+code import.tf
+```
+
+Conteúdo do `import.tf` (troque `sg-xxxx` pelo seu `SG_ID` e `vpc-xxxx` pela sua VPC):
+
+```hcl
+terraform {
+  required_version = ">= 1.10"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+# O import block diz: "este recurso ja existe na AWS com este id; passe a
+# gerencia-lo com este endereco no Terraform". Declarativo e versionavel.
+import {
+  to = aws_security_group.legado
+  id = "sg-xxxx"
+}
+
+resource "aws_security_group" "legado" {
+  name        = "vortex-legado-sg"
+  description = "SG criado na mao para demo de import"
+  vpc_id      = "vpc-xxxx"
+}
+```
+
+<details>
+<summary><b>💡 Clique para entender: import block vs. terraform import (CLI)</b></summary>
+<blockquote>
+
+Existem duas formas de adotar um recurso existente:
+
+- **`terraform import` (CLI, forma antiga):** um comando imperativo que mexe direto no estado. Não fica registrado em lugar nenhum — quem revisar o PR não vê o que foi importado.
+- **`import {}` block (TF 1.5+, forma moderna):** declarativo, **versionado no código**, revisável em PR, e funciona com `-generate-config-out` para gerar o HCL do recurso automaticamente. É o caminho recomendado hoje.
+
+A vantagem do bloco: a adoção de infra legada vira parte do histórico do repositório, não um comando solto que alguém rodou uma vez.
+
+Documentação oficial: [Import block](https://developer.hashicorp.com/terraform/language/import)
+
+</blockquote>
+</details>
+
+---
+
+<a id="passo-13"></a>
+
+**13.** Inicialize e rode o `plan`. O Terraform mostra `1 to import` — ele vai **adotar** o recurso, não criar um novo:
+
+```bash
+terraform init
+terraform plan
+```
+
+> [!TIP]
+> Se você não quisesse escrever o `resource` à mão, poderia rodar `terraform plan -generate-config-out=gerado.tf` e o Terraform **geraria** o bloco do recurso a partir do que existe na AWS. Ótimo para recursos grandes (um SG com dezenas de regras).
+
+---
+
+<a id="passo-14"></a>
+
+**14.** Aplique a adoção e confirme que o recurso entrou no estado:
+
+```bash
+terraform apply -auto-approve
+terraform state list
+```
+
+Você verá `aws_security_group.legado` no estado. **O recurso não foi recriado** — o mesmo `SG_ID` de antes agora é gerenciado pelo Terraform.
+
+### Checkpoint
+
+Se chegou até aqui, você:
+
+- criou um recurso "na mão" (fora do Terraform)
+- adotou esse recurso com um `import` block, sem recriá-lo
+- confirmou que ele agora vive no estado do Terraform
+
+---
+
+## Parte 4 - Refatorando sem destruir (moved)
+
+> Diego de novo: *— "Esse nome `legado` foi só para a demo. Na vida real você vai querer **renomear** recursos conforme o código evolui. Só que renomear um recurso no Terraform, ingenuamente, faz ele **destruir e recriar**. Existe um jeito de avisar o Terraform que é só um rename."*
+
+### Resultado esperado desta parte
+
+Você vai renomear o recurso importado usando um **`moved` block**, provando que o Terraform apenas **move o endereço no estado** — sem destruir nem recriar nada.
+
+---
+
+<a id="passo-15"></a>
+
+**15.** No mesmo `import.tf`, **remova o `import` block** (a adoção já aconteceu) e adicione um **`moved` block** renomeando `legado` para `vortex`. O arquivo fica assim (mantenha seu `vpc-xxxx`):
+
+```hcl
+terraform {
+  required_version = ">= 1.10"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+# moved diz: "o recurso que se chamava .legado agora se chama .vortex".
+# O Terraform so atualiza o endereco no estado — nao destroi nada.
+moved {
+  from = aws_security_group.legado
+  to   = aws_security_group.vortex
+}
+
+resource "aws_security_group" "vortex" {
+  name        = "vortex-legado-sg"
+  description = "SG criado na mao para demo de import"
+  vpc_id      = "vpc-xxxx"
+}
+```
+
+---
+
+<a id="passo-16"></a>
+
+**16.** Rode o `plan`. A mensagem-chave é `has moved to`, e o resumo é `0 to add, 0 to change, 0 to destroy`:
+
+```bash
+terraform plan
+```
+
+<details>
+<summary><b>💡 Clique para entender: moved vs. renomear ingenuamente</b></summary>
+<blockquote>
+
+O endereço de um recurso no Terraform (ex: `aws_security_group.legado`) é a chave que liga o código ao objeto real no estado. Se você simplesmente troca o nome no código, o Terraform pensa que o recurso antigo **sumiu** (destrói) e que um novo **apareceu** (cria) — em produção, isso é downtime.
+
+O **`moved` block** (TF 1.1+) avisa: "isto é um rename, não uma troca". O Terraform só atualiza o endereço no estado, mantendo o recurso real intacto. Fica versionado no código, então o histórico explica a refatoração — e você pode remover o bloco depois que todos os ambientes aplicaram.
+
+Documentação oficial: [moved block](https://developer.hashicorp.com/terraform/language/moved)
+
+</blockquote>
+</details>
+
+---
+
+<a id="passo-17"></a>
+
+**17.** Aplique o rename e **limpe** o recurso da demo (ele foi só para o exercício de import/moved; a rede da Vortex continua de pé):
+
+```bash
+terraform apply -auto-approve
+terraform destroy -auto-approve
+```
+
+### Checkpoint
+
+Se chegou até aqui, você:
+
+- renomeou um recurso com `moved`, sem destruí-lo
+- viu o `plan` confirmar `0 to destroy`
+- destruiu o SG da demo (a VPC/route tables da Vortex permanecem)
+
+---
+
 ## Conclusão
 
-Você componentizou a rede da Vortex em dois módulos reutilizáveis: um para a VPC/subnets/IGW, outro para o roteamento. A raiz (`-call`) só invoca; o módulo define. Mudou a regra de rede? Muda no módulo, uma vez.
+Você componentizou a rede da Vortex em dois módulos reutilizáveis: um para a VPC/subnets/IGW, outro para o roteamento. A raiz (`-call`) só invoca; o módulo define. Mudou a regra de rede? Muda no módulo, uma vez. E foi além: aprendeu a **adotar** infraestrutura legada (`import`) e a **refatorar sem destruir** (`moved`) — duas ferramentas essenciais para quem herda uma infra criada no console, exatamente o caso da Vortex.
 
-**Mensagem para Helena:** a rede agora é um módulo. Para abrir a 31ª cidade, é um `module "vpc"` a mais — não copiar e colar 40 linhas de HCL. O próximo passo é colocar servidores nessa rede e escalá-los só mudando um número.
+**Mensagem para Helena:** a rede agora é um módulo, e aquele Security Group órfão que ninguém ousava tocar já está sob o Terraform. Para abrir a 31ª cidade, é um `module "vpc"` a mais — não copiar e colar 40 linhas de HCL. O próximo passo é colocar servidores nessa rede e escalá-los só mudando um número.
+
+**⏱️ Cronômetro de reprodutibilidade da Vortex:** *recriar toda a rede de uma cidade* — antes: dezenas de cliques no console, propenso a erro e impossível de auditar. Agora: **dois `apply` (VPC + rotas), idênticos para cada cidade.**
 
 ## Próximo passo
 
