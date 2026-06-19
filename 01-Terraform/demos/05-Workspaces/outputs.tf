@@ -1,7 +1,11 @@
-output "filename" {
-  value = module.localfile.filename
+output "env" {
+  value = module.servidor.env
 }
 
-output "content" {
-  value = module.localfile.content
+output "instance_type" {
+  value = module.servidor.instance_type
+}
+
+output "instance_id" {
+  value = module.servidor.instance_id
 }

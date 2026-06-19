@@ -1,9 +1,14 @@
-output "filename" {
-  value       = local_file.test.filename
-  description = "The name of the file to be exported with the extension, e.g. in default workspace = foo-dev.txt, in prod workspace = foo-prod.txt"
+output "env" {
+  value       = local.env
+  description = "Workspace (ambiente) atual."
 }
 
-output "content" {
-  value       = local_file.test.content
-  description = "The content of the file to be exported"
+output "instance_type" {
+  value       = aws_instance.server.instance_type
+  description = "Tipo de instancia provisionado para este workspace (dev=t3.micro, prod=t3.small)."
+}
+
+output "instance_id" {
+  value       = aws_instance.server.id
+  description = "ID da instancia criada neste workspace."
 }
