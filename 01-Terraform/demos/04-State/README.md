@@ -581,10 +581,11 @@ A partir daí você inspeciona o arquivo recuperado e, se for o caso, o promove 
 
 <a id="passo-21"></a>
 
-**21.** Baixe o estado atual e abra-o. Repare que **todos os atributos estão em texto claro** — IDs, IPs privados, tudo legível:
+**21.** Baixe o estado atual e abra-o. O comando abaixo **descobre sozinho** o nome do seu bucket (o que começa com `base-config`) e baixa o `terraform.tfstate` para a tela. Repare que **todos os atributos estão em texto claro** — IDs, IPs privados, tudo legível:
 
 ```bash
-aws s3 cp s3://base-config-SEU-RM/demo-state/terraform.tfstate - | head -60
+BUCKET=$(aws s3 ls | awk '{print $3}' | grep '^base-config' | head -1)
+aws s3 cp "s3://$BUCKET/demo-state/terraform.tfstate" - | head -60
 ```
 
 > [!CAUTION]
