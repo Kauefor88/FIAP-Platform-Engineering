@@ -775,14 +775,22 @@ Documentação oficial: [Manage resource drift](https://developer.hashicorp.com/
 
 <a id="passo-27"></a>
 
-**27.** Reconcilie e destrua:
+**27.** Vamos reconciliar o drift e, só depois, destruir. Faça em duas etapas separadas, para conseguir ler a saída de cada uma com calma.
+
+**27.1.** Reconcilie a infra com o código e **leia a saída com atenção**:
 
 ```bash
 terraform apply -auto-approve
-terraform destroy -auto-approve
 ```
 
-O `apply` removeu a tag feita na mão — a infra real voltou a ser exatamente o que o código descreve.
+> [!IMPORTANT]
+> Observe na saída que o Terraform **remove a tag `MexidoNaMao`** que você tinha criado na mão pela AWS CLI. Esse é o objetivo deste passo: o `apply` traz a infra real de volta para exatamente o que o código descreve — ou seja, **reconcilia o drift**. Confirme que viu essa alteração antes de continuar.
+
+**27.2.** Agora sim, destrua a instância:
+
+```bash
+terraform destroy -auto-approve
+```
 
 ### Checkpoint
 
