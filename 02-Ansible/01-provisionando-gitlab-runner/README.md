@@ -283,7 +283,12 @@ ssh-keygen -t rsa -b 2048 -C "gitlab key" -f /home/vscode/.ssh/gitlab
 code /home/vscode/.ssh/gitlab.pub
 ```
 
-**5.4.** Acesse a página de chaves SSH do seu GitLab: [Chaves SSH do GitLab](https://gitlab.com/-/user_settings/ssh_keys).
+![](img/gitlab-1.1.png)
+
+**5.4.** Acesse a página de chaves SSH do seu GitLab: [Chaves SSH do GitLab](https://gitlab.com/-/user_settings/ssh_keys) e clique em **"Add new key"**.
+
+![](img/gitlab-1.2.png)
+
 
 **5.5.** Cole o conteúdo copiado no campo destacado e clique em **Add New Key**.
 
@@ -332,11 +337,13 @@ Ao final desta etapa, você terá um projeto `primeiro-projeto` no GitLab com o 
 
 **6.** No **console web do GitLab**, crie um novo projeto. Acesse [Novo projeto](https://gitlab.com/projects/new) e clique em **Create blank project**.
 
+![](img/gitlab-3.1.png)
+
 ---
 
 <a id="passo-7"></a>
 
-**7.** Dê o nome de `primeiro-projeto`, marque como **Public** e **desmarque** a opção de inicializar com README.
+**7.** Selecione seu nome de usuário, dê o nome de `primeiro-projeto`, marque como **Public** e **desmarque** a opção de inicializar com README.
 
 ![](img/gitlab-3.png)
 
@@ -443,6 +450,8 @@ Ao final desta etapa, você terá um token de registro de runner gerado no GitLa
 
 **11.** Em **Runners**, clique para expandir.
 
+![](img/gitlab-7-1.png)
+
 ![](img/gitlab-7.png)
 
 ---
@@ -484,13 +493,13 @@ Ao final desta etapa, você terá um token de registro de runner gerado no GitLa
 
 <a id="passo-16"></a>
 
-**16.** De volta ao **Codespaces**, guarde o token no **AWS SSM Parameter Store** — não em um arquivo. Rode o comando abaixo trocando `glrt-COLE-SEU-TOKEN-AQUI` pelo token que você copiou (mantenha as aspas):
+**16.** De volta ao **Codespaces**, guarde o token no **AWS SSM Parameter Store** — não em um arquivo. Rode o comando abaixo trocando `COLE-SEU-TOKEN-AQUI` pelo token que você copiou (mantenha as aspas):
 
 ```bash
 aws ssm put-parameter \
   --name "/fiap/gitlab-runner/token" \
   --type SecureString \
-  --value "glrt-COLE-SEU-TOKEN-AQUI" \
+  --value "COLE-SEU-TOKEN-AQUI" \
   --region us-east-1 \
   --overwrite
 ```
@@ -504,10 +513,6 @@ aws ssm get-parameter --name "/fiap/gitlab-runner/token" --with-decryption \
 
 Deve imprimir o seu token `glrt-...`. É esse parâmetro que o playbook vai ler automaticamente na hora de registrar o runner.
 
-<!-- PRINT SUGERIDO: img/ssm-parameter-token.png
-     Console AWS > Systems Manager > Parameter Store, mostrando o parametro
-     /fiap/gitlab-runner/token do tipo SecureString na lista. Enquadrar a coluna
-     Name e a coluna Type (SecureString). NAO mostrar o valor decifrado. -->
 ![](img/ssm-parameter-token.png)
 
 <details>
@@ -559,26 +564,30 @@ cd /workspaces/FIAP-Platform-Engineering/02-Ansible/01-provisionando-gitlab-runn
 
 <a id="passo-18"></a>
 
-**18.** O state remoto deste projeto usa um bucket S3. Abra o arquivo `state.tf` e troque o placeholder `base-config-<SEU-RM>` pelo nome do **seu** bucket de state (o mesmo criado no setup inicial do módulo 01):
+**18.** O state remoto deste projeto usa um bucket S3 — o mesmo `base-config-<SEU-RM>` criado no setup inicial do módulo 01. Em vez de editar o arquivo na mão, o comando abaixo **descobre o seu bucket automaticamente** e o grava no `state.tf`:
 
 ```bash
-code state.tf
+BUCKET=$(aws s3 ls | awk '{print $3}' | grep '^base-config' | head -1)
+sed -i "s/base-config-SEU-RM/$BUCKET/" state.tf
+grep bucket state.tf
 ```
 
-O bloco deve ficar parecido com isto, com o seu RM no lugar:
+O `grep` no final deve mostrar `bucket = "base-config-<SEU-RM>"` já com o nome do seu bucket — confirme que não ficou o placeholder `SEU-RM`.
 
-```hcl
-terraform {
-  backend "s3" {
-    bucket = "base-config-12345"
-    key    = "gitlab-runner-fleet"
-    region = "us-east-1"
-  }
-}
-```
+<details>
+<summary><b>💡 Clique para entender: o que esse comando faz</b></summary>
+<blockquote>
+
+- `aws s3 ls` lista seus buckets; `awk '{print $3}'` pega só o nome; `grep '^base-config'` filtra o do curso; `head -1` garante um só.
+- `sed -i "s/.../$BUCKET/" state.tf` substitui o placeholder `base-config-SEU-RM` pelo nome real, direto no arquivo.
+
+Fazemos assim porque o backend do Terraform **não aceita variável** no nome do bucket — o valor precisa ser literal no `state.tf`. Descobrir e substituir por comando evita erro de digitação (espaço, maiúscula, RM errado), que é a causa nº 1 de falha no `init`.
+
+</blockquote>
+</details>
 
 > [!CAUTION]
-> Nome de bucket S3 **não pode conter espaços nem letras maiúsculas**. Use apenas minúsculas, números e hífens (ex: `base-config-12345`).
+> Se você tiver **mais de um** bucket começando com `base-config`, o comando pega o primeiro. Confira o resultado do `grep` e, se pegou o errado, edite o `state.tf` com `code state.tf` e ajuste o nome à mão.
 
 ---
 
@@ -687,13 +696,17 @@ cd /workspaces/FIAP-Platform-Engineering/02-Ansible/01-provisionando-gitlab-runn
 
 <a id="passo-24"></a>
 
-**24.** Abra o arquivo de **inventário** (`hosts`), onde configuramos quais máquinas o Ansible acessa e como. Você vai preencher **dois** valores: o **instance id** da EC2 (passo 22) como host, e o nome do **seu bucket S3** (`base-config-<SEU-RM>`, do setup inicial) que o plugin SSM usa para transferir arquivos:
+**24.** O arquivo de **inventário** (`hosts`) diz ao Ansible quais máquinas acessar e como. Ele precisa de **dois** valores: o **instance id** da EC2 (do passo 22) como host, e o nome do **seu bucket S3** (`base-config-<SEU-RM>`) que o plugin SSM usa para transferir arquivos. O comando abaixo **descobre os dois automaticamente** e os grava no `hosts` (o instance id vem do Terraform da pasta ao lado; o bucket, do `aws s3 ls`):
 
 ```bash
-code hosts
+ID=$(terraform -chdir=../terraform-gitlab-runner output -raw instance_id)
+BUCKET=$(aws s3 ls | awk '{print $3}' | grep '^base-config' | head -1)
+sed -i "s|<INSTANCE ID DO SERVER>|$ID|" hosts
+sed -i "s/base-config-SEU-RM/$BUCKET/" hosts
+cat hosts
 ```
 
-Deixe o arquivo com este formato (troque pelo seu instance id e pelo seu bucket):
+O `cat` no final deve mostrar o `hosts` já preenchido — com o `i-...` real embaixo de `[runner]` e o seu bucket em `ansible_aws_ssm_bucket_name`, mais ou menos assim:
 
 ```ini
 [runner]
