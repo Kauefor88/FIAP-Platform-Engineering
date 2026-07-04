@@ -116,13 +116,13 @@ Seu **runner próprio** de pé e **online** no GitLab, pronto para rodar o pipel
 
 <a id="prep-3"></a>
 
-**Passo 0.3.** No **terminal do Codespaces**, guarde o token no **SSM Parameter Store** (o script e o playbook leem dele — nada de segredo em arquivo). Troque `glrt-COLE-SEU-TOKEN-AQUI` pelo token do passo 0.2:
+**Passo 0.3.** No **terminal do Codespaces**, guarde o token no **SSM Parameter Store** (o script e o playbook leem dele — nada de segredo em arquivo). Troque `COLE-SEU-TOKEN-AQUI` pelo token do passo 0.2:
 
 ```bash
 aws ssm put-parameter \
   --name "/fiap/gitlab-runner/token" \
   --type SecureString \
-  --value "glrt-COLE-SEU-TOKEN-AQUI" \
+  --value "COLE-SEU-TOKEN-AQUI" \
   --region us-east-1 \
   --overwrite
 ```
