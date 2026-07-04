@@ -89,6 +89,12 @@ Documentação oficial:
 </blockquote>
 </details>
 
+### A arquitetura que você vai construir
+
+Quando o trabalho estiver concluído, é isto que estará no ar: um `git push` que, sozinho, valida, revisa a segurança e provisiona a infraestrutura da Vortex. Este é o destino — as partes a seguir te levam até ele, peça por peça.
+
+![Arquitetura final do Trabalho Final: um git push no repositório GitLab dispara o pipeline de 3 stages (validar, revisar com Checkov, aplicar) no GitLab Runner próprio (EC2 com LabRole); o terraform apply lê/grava o state no S3 e provisiona, na VPC fiap-lab, um ALB com Target Group distribuindo tráfego para as EC2 nginx (1 nó em dev, 3 em prod) sob um Security Group.](img/arquitetura-final.png)
+
 ---
 
 ## Parte 0 - Preparação (provisionamento entregue)
