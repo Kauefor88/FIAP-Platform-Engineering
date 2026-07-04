@@ -34,7 +34,7 @@ Este é o **Trabalho Final** da disciplina. Ele consolida tudo que você pratico
 
 ## Objetivo
 
-Provar — com um artefato funcional e um documento de decisão — que a infraestrutura da Vortex é **código versionado, reproduzível e validado automaticamente**. Você vai partir do código da demo **Count** (módulo 01) e evoluí-lo até um projeto modular, parametrizado por ambiente (`dev`/`prod`), com state remoto no S3 e um pipeline de CI/CD de 3 etapas que roda no seu próprio Runner.
+Provar — com um artefato funcional e um `DECISION.md` — que a infraestrutura da Vortex é **código versionado, reproduzível e validado automaticamente**: um `push` valida, barra o inseguro e provisiona tudo sozinho.
 
 ## O que você vai entregar
 
@@ -66,9 +66,9 @@ Ao final, você terá um **repositório GitLab** que:
 
 ## Contexto
 
-Nos módulos anteriores cada conceito foi praticado de forma isolada: um lab para `count`, um lab para state remoto, um lab para o pipeline. No mundo real, esses pedaços precisam coexistir no **mesmo repositório**, governados pelo mesmo fluxo. O Trabalho Final existe para forçar essa integração — é o exercício que mais se parece com o trabalho do dia a dia de um Platform Engineer: pegar peças soltas e transformá-las em um sistema reproduzível.
+Cada conceito foi praticado isolado (um lab para `count`, um para state, um para o pipeline). Aqui eles coexistem no **mesmo repositório**, sob o mesmo fluxo — é o que mais se parece com o dia a dia de um Platform Engineer: juntar peças soltas num sistema reproduzível.
 
-A base de código é a **demo Count** do módulo 01 ([`01-Terraform/demos/03-Count`](../01-Terraform/demos/03-Count/README.md)): ela já cria N instâncias EC2 com Nginx atrás de um **Application Load Balancer (ALB)**. Seu trabalho é evoluí-la de "demo que roda na sua máquina" para "projeto que roda sozinho via pipeline, em dois ambientes, com histórico auditável".
+A base é a **demo Count** ([`01-Terraform/demos/03-Count`](../01-Terraform/demos/03-Count/README.md)): N instâncias EC2 com Nginx atrás de um **ALB**. Você a evolui de "demo que roda na sua máquina" para "projeto que roda sozinho via pipeline, em dois ambientes, auditável".
 
 <details>
 <summary><b>💡 Clique para entender: por que essa integração existe</b></summary>
